@@ -1,4 +1,4 @@
-/** research.ts —— 输入商品名，自动搜索 B站视频、抓评论并调用 DeepSeek 提取价格。 */
+/** research.ts —— 输入商品名，自动搜索 B站视频、抓评论并调用豆包 Seed 提取价格。 */
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,7 +8,7 @@ import { createBiliClient } from './bilibili/client.ts';
 import { crawlVideoComments } from './comment-crawler.ts';
 import { PROJECT_ROOT, loadConfig } from './config.ts';
 import { assembleConversations, type CommentConversation, type ConversationSourceRow } from './conversation.ts';
-import { createDeepSeekClient, parseModelJson } from './deepseek.ts';
+import { createArkClient, parseModelJson } from './ark.ts';
 import { insertComments, openDb, upsertVideo } from './db.ts';
 import { buildPriceExtractionPrompt } from './extractor/prompt.ts';
 import { validatePriceExtraction } from './extractor/validator.ts';
@@ -21,7 +21,7 @@ import {
 import type { PriceClaim } from './extractor/types.ts';
 
 const HELP_TEXT = `
-输入商品名称，自动搜索 B站视频、抓取评论并使用 DeepSeek 分析价格
+输入商品名称，自动搜索 B站视频、抓取评论并使用豆包 Seed 分析价格
 只处理播放量不少于 ${MIN_RESEARCH_VIDEO_PLAY} 的视频。
 
 用法：
@@ -38,7 +38,7 @@ const HELP_TEXT = `
   --db                  SQLite 数据库路径（默认 data/bilibili.db）
   -h, --help            显示帮助
 
-需要在 .env 中配置 DEEPSEEK_API_KEY；建议同时配置 BILI_SESSDATA。
+需要在 .env 中配置 ARK_API_KEY；建议同时配置 BILI_SESSDATA。
 `;
 
 function toPositiveInt(raw: string | undefined, fallback: number): number {
@@ -198,8 +198,8 @@ async function main(): Promise<void> {
   if (!product) throw new Error('缺少 --product 参数，例如：--product "RTX 5070 Ti"');
 
   const config = loadConfig();
-  if (!config.deepseekApiKey) {
-    throw new Error('未配置 DEEPSEEK_API_KEY，请先在项目根目录的 .env 中填写');
+  if (!config.arkApiKey) {
+    throw new Error('未配置 ARK_API_KEY，请先在项目根目录的 .env 中填写');
   }
 
   const videoLimit = toPositiveInt(values['video-limit'], 3);
@@ -219,10 +219,10 @@ async function main(): Promise<void> {
     maxRetries: config.maxRetries,
     userAgent: config.userAgent,
   });
-  const deepseek = createDeepSeekClient({
-    apiKey: config.deepseekApiKey,
-    baseUrl: config.deepseekBaseUrl,
-    model: config.deepseekModel,
+  const ark = createArkClient({
+    apiKey: config.arkApiKey,
+    baseUrl: config.arkBaseUrl,
+    model: config.arkModel,
   });
   const db = openDb(dbFile);
   const outputLines: string[] = [];
@@ -288,7 +288,7 @@ async function main(): Promise<void> {
           console.log(`  [分析 ${candidateIndex + 1}/${candidates.length}] ${conversation.conversationLabel}`);
           const startedAt = Date.now();
           try {
-            const response = await deepseek.extractJson(buildPriceExtractionPrompt(conversation, {
+            const response = await ark.extractJson(buildPriceExtractionPrompt(conversation, {
               targetProduct: product,
               videoTitle: crawled.video.title,
             }));

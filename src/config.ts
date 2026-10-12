@@ -56,12 +56,12 @@ export interface AppConfig {
   pageSize: number;
   /** 请求头里的 User-Agent，伪装成真实浏览器 */
   userAgent: string;
-  /** DeepSeek API Key，空字符串表示未配置 */
-  deepseekApiKey: string;
-  /** DeepSeek API 基础地址 */
-  deepseekBaseUrl: string;
-  /** DeepSeek 模型名 */
-  deepseekModel: string;
+  /** 火山方舟 API Key，空字符串表示未配置 */
+  arkApiKey: string;
+  /** 火山方舟 API 基础地址 */
+  arkBaseUrl: string;
+  /** 豆包模型名 */
+  arkModel: string;
 }
 
 /** 读取配置。每次调用都重新读一遍环境变量，方便测试时临时改值 */
@@ -82,8 +82,8 @@ export function loadConfig(): AppConfig {
     // 用真实 Chrome 的 UA，避免被识别为脚本
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    deepseekApiKey: process.env['DEEPSEEK_API_KEY'] ?? '',
-    deepseekBaseUrl: process.env['DEEPSEEK_BASE_URL'] ?? 'https://api.deepseek.com',
-    deepseekModel: process.env['DEEPSEEK_MODEL'] ?? 'deepseek-flash',
+    arkApiKey: process.env['ARK_API_KEY'] ?? '',
+    arkBaseUrl: process.env['ARK_BASE_URL'] ?? 'https://ark.cn-beijing.volces.com/api/v3',
+    arkModel: process.env['ARK_MODEL'] ?? 'doubao-seed-2-0-mini-260428',
   };
 }

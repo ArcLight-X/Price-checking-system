@@ -14,7 +14,7 @@
     "research": "node --disable-warning=ExperimentalWarning src/research.ts",
     "db:info": "node --disable-warning=ExperimentalWarning scripts/inspect-db.mjs",
     "check:auth": "node --disable-warning=ExperimentalWarning scripts/check-auth.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test tests/bilibili-search.test.ts tests/comment-selection.test.ts tests/conversation.test.ts tests/deepseek.test.ts tests/extraction-validator.test.ts tests/research-selection.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/ark.test.ts tests/bilibili-search.test.ts tests/comment-selection.test.ts tests/conversation.test.ts tests/extraction-validator.test.ts tests/research-selection.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

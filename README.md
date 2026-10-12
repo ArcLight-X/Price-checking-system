@@ -95,13 +95,13 @@ node src/query.ts export   --video BV1GJ411x7h7 --out data/out.jsonl
 node src/query.ts logs                                        # 抓取流水日志
 ```
 
-### 3）使用 DeepSeek 分析评论
+### 3）使用豆包 Seed 分析评论
 
 先在本地 `.env` 中填写：
 
 ```text
-DEEPSEEK_API_KEY=你的API密钥
-DEEPSEEK_MODEL=deepseek-flash
+ARK_API_KEY=你的火山方舟API密钥
+ARK_MODEL=doubao-seed-2-0-mini-260428
 ```
 
 然后执行：
@@ -303,7 +303,7 @@ SELECT uname, like_count, content
 
 | 阶段 | 内容 |
 |---|---|
-| ✅ **当前** | 抓评论 → 存 SQLite → 对话组装 → DeepSeek API 抽取 → 证据与金额程序验证 → JSONL 结果 |
+| ✅ **当前** | 抓评论 → 存 SQLite → 对话组装 → 豆包 Seed 抽取 → 证据与金额程序验证 → JSONL 结果 |
 | 下一步 | 根据实际抽取效果调整 Prompt，并筛选更可能包含价格的候选对话以节省 Token |
 | 之后 | 商品对齐（4070ti / 4070 Ti 归一）、置信度打分、时效衰减、跨视频交叉验证 |
 | 之后 | 关键词订阅 + 定时调度（BullMQ）+ 告警推送 |

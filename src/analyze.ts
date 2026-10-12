@@ -1,17 +1,17 @@
-/** analyze.ts —— 调用 DeepSeek，从已抓取评论中提取价格线索并导出 JSONL。 */
+/** analyze.ts —— 调用豆包 Seed，从已抓取评论中提取价格线索并导出 JSONL。 */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { PROJECT_ROOT, loadConfig } from './config.ts';
 import { assembleConversations, type ConversationSourceRow } from './conversation.ts';
-import { createDeepSeekClient, parseModelJson } from './deepseek.ts';
+import { createArkClient, parseModelJson } from './ark.ts';
 import { openDb } from './db.ts';
 import { buildPriceExtractionPrompt } from './extractor/prompt.ts';
 import { validatePriceExtraction } from './extractor/validator.ts';
 
 const HELP_TEXT = `
-使用 DeepSeek 分析已抓取的 B站评论对话
+使用豆包 Seed 分析已抓取的 B站评论对话
 
 用法：
   node src/analyze.ts --video <BV号> [选项]
@@ -23,7 +23,7 @@ const HELP_TEXT = `
   --db       SQLite 数据库路径（默认 data/bilibili.db）
   -h, --help 显示帮助
 
-需要在 .env 中配置 DEEPSEEK_API_KEY。
+需要在 .env 中配置 ARK_API_KEY。
 `;
 
 async function main(): Promise<void> {
@@ -44,8 +44,8 @@ async function main(): Promise<void> {
   if (!values.video) throw new Error('缺少 --video 参数');
 
   const config = loadConfig();
-  if (!config.deepseekApiKey) {
-    throw new Error('未配置 DEEPSEEK_API_KEY，请先在项目根目录的 .env 中填写');
+  if (!config.arkApiKey) {
+    throw new Error('未配置 ARK_API_KEY，请先在项目根目录的 .env 中填写');
   }
 
   const limit = Math.max(1, Number.parseInt(values.limit ?? '10', 10) || 10);
@@ -80,14 +80,14 @@ async function main(): Promise<void> {
     ).all(values.video, ...rootIds) as unknown as ConversationSourceRow[];
 
     const conversations = assembleConversations([...roots, ...replies]);
-    const client = createDeepSeekClient({
-      apiKey: config.deepseekApiKey,
-      model: config.deepseekModel,
-      baseUrl: config.deepseekBaseUrl,
+    const client = createArkClient({
+      apiKey: config.arkApiKey,
+      model: config.arkModel,
+      baseUrl: config.arkBaseUrl,
     });
     const outputLines: string[] = [];
 
-    console.log(`准备分析 ${conversations.length} 个对话，模型：${config.deepseekModel}`);
+    console.log(`准备分析 ${conversations.length} 个对话，模型：${config.arkModel}`);
     for (const [index, conversation] of conversations.entries()) {
       console.log(`[${index + 1}/${conversations.length}] ${conversation.conversationLabel}（${conversation.contextStatus}）`);
       try {
