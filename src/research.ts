@@ -15,6 +15,7 @@ import { validatePriceExtraction } from './extractor/validator.ts';
 import {
   MIN_RESEARCH_VIDEO_PLAY,
   hasEnoughPlays,
+  matchesRequestedProduct,
   selectResearchConversations,
 } from './research-selection.ts';
 import type { PriceClaim } from './extractor/types.ts';
@@ -93,6 +94,7 @@ async function searchResearchVideos(
   const targetParts = productParts(product).map(normalizeSearchText).filter((part) => part.length >= 2);
   return [...unique.values()]
     .filter(hasEnoughPlays)
+    .filter((row) => matchesRequestedProduct(row.title, product))
     .map((row) => {
       const title = normalizeSearchText(row.title);
       const productMatch = title.includes(normalizedProduct);

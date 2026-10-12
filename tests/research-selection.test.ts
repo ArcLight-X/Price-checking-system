@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { CommentConversation } from '../src/conversation.ts';
 import {
   hasEnoughPlays,
+  matchesRequestedProduct,
   selectResearchConversations,
 } from '../src/research-selection.ts';
 
@@ -33,6 +34,16 @@ test('商品研究只保留播放量至少 5000 的视频', () => {
   assert.equal(hasEnoughPlays({ play: 4999 }), false);
   assert.equal(hasEnoughPlays({ play: 5000 }), true);
   assert.equal(hasEnoughPlays({ play: 5001 }), true);
+});
+
+test('精确目标商品排除后继数字型号', () => {
+  assert.equal(matchesRequestedProduct('MacBook Neo 低价购买实操', 'MacBook Neo'), true);
+  assert.equal(matchesRequestedProduct('MacBook Neo 2 新泄露', 'MacBook Neo'), false);
+  assert.equal(matchesRequestedProduct('MacBook Neo 3 价格预测', 'MacBook Neo'), false);
+  assert.equal(matchesRequestedProduct('MacBook Neo 2026年评测', 'MacBook Neo'), true);
+  assert.equal(matchesRequestedProduct('MacBook Neo 16GB 版本', 'MacBook Neo'), true);
+  assert.equal(matchesRequestedProduct('MacBook Neo 2TB 版本', 'MacBook Neo'), true);
+  assert.equal(matchesRequestedProduct('RTX 5070 Ti 好价是多少', 'RTX 5070 Ti'), true);
 });
 
 test('商品研究只保留价格候选并优先完整命中目标型号', () => {

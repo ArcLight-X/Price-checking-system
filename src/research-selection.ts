@@ -6,6 +6,21 @@ export function hasEnoughPlays(video: { play: number }): boolean {
   return video.play >= MIN_RESEARCH_VIDEO_PLAY;
 }
 
+function normalizeProductName(value: string): string {
+  return value.toLowerCase().replace(/[\s\-_+·.,，。/\\()[\]（）]/g, '');
+}
+
+/** 排除用户目标型号后面又多出一代数字的标题，例如 MacBook Neo 2。 */
+export function matchesRequestedProduct(title: string, product: string): boolean {
+  const normalizedProduct = normalizeProductName(product);
+  const normalizedTitle = normalizeProductName(title);
+  const position = normalizedTitle.indexOf(normalizedProduct);
+  if (position < 0) return false;
+
+  const suffix = normalizedTitle.slice(position + normalizedProduct.length);
+  return !/^[2-9](?!\d|gb|tb|寸|英寸)/.test(suffix);
+}
+
 const EXPLICIT_AMOUNT_PATTERNS = [
   /[¥￥]\s*\d{2,7}(?:\.\d{1,2})?/i,
   /\d{2,7}(?:\.\d{1,2})?\s*(?:元|块|rmb)/i,
@@ -18,7 +33,7 @@ const EXPLICIT_AMOUNT_PATTERNS = [
 const PURCHASE_PLAN_PATTERN = /(?:价格|价位|券|补贴|优惠|会员|运费|定金|平台|店|专营店|零点|0点|车|淘宝|京东|拼多多|抖音)/i;
 
 function normalize(value: string): string {
-  return value.toLowerCase().replace(/[\s\-_+·.,，。/\\()[\]（）]/g, '');
+  return normalizeProductName(value);
 }
 
 /** 优先选择含价格信号和目标商品型号的对话，减少无效模型调用。 */
