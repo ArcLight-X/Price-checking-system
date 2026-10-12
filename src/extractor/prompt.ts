@@ -4,7 +4,10 @@ import { EXTRACTION_SCHEMA_VERSION } from './types.ts';
 /**
  * 生成供应商无关的抽取提示词。调用方可以把 system/user 分别交给任意支持 JSON 输出的 LLM。
  */
-export function buildPriceExtractionPrompt(conversation: CommentConversation): {
+export function buildPriceExtractionPrompt(
+  conversation: CommentConversation,
+  context: { targetProduct?: string; videoTitle?: string } = {},
+): {
   system: string;
   user: string;
 } {
@@ -18,7 +21,8 @@ export function buildPriceExtractionPrompt(conversation: CommentConversation): {
 5. 玩笑、反问、询价不能当成真实成交。
 6. 评论证据默认只能是 historical_report 或 unverified，绝不能仅凭评论标成 currently_verified。
 7. contextStatus 不是 complete 时要在 verification.reasons 中说明上下文不完整。
-8. 只输出一个 JSON 对象，不要 Markdown，不要解释。`;
+8. 只输出与目标商品相符的价格；评论提到其他商品时不要混入。
+9. 只输出一个 JSON 对象，不要 Markdown，不要解释。`;
 
   const outputShape = {
     schemaVersion: EXTRACTION_SCHEMA_VERSION,
@@ -51,7 +55,9 @@ export function buildPriceExtractionPrompt(conversation: CommentConversation): {
     notes: [],
   };
 
-  const user = `对话上下文状态：${conversation.contextStatus}
+  const user = `目标商品：${context.targetProduct ?? '未指定'}
+视频标题：${context.videoTitle ?? '未提供'}
+对话上下文状态：${conversation.contextStatus}
 站方回复数：${conversation.expectedReplyCount}
 已保留回复数：${conversation.storedReplyCount}
 

@@ -133,10 +133,15 @@ test('没有价格主张时允许 claims 为空', () => {
 });
 
 test('Prompt 强制未知值、逐字证据和禁止评论冒充当前核验', () => {
-  const prompt = buildPriceExtractionPrompt(conversation('truncated'));
+  const prompt = buildPriceExtractionPrompt(conversation('truncated'), {
+    targetProduct: 'RTX 5070 Ti',
+    videoTitle: '显卡购买建议',
+  });
   assert.match(prompt.system, /缺失时填 null 或 \[\]/);
   assert.match(prompt.system, /逐字摘自/);
   assert.match(prompt.system, /绝不能仅凭评论标成 currently_verified/);
   assert.match(prompt.user, /contextStatus|上下文状态：truncated/);
   assert.match(prompt.user, /还要10元运费/);
+  assert.match(prompt.user, /目标商品：RTX 5070 Ti/);
+  assert.match(prompt.user, /视频标题：显卡购买建议/);
 });

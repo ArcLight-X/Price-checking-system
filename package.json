@@ -2,7 +2,7 @@
   "name": "ex_mall",
   "version": "0.1.0",
   "private": true,
-  "description": "B站评论区价格信息采集系统 · 阶段一：抓取某个视频的评论区并存入本地 SQLite 数据库",
+  "description": "从 B站视频评论中搜索、提取并校验商品价格与购买方案",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -10,9 +10,11 @@
   "scripts": {
     "crawl": "node --disable-warning=ExperimentalWarning src/crawl.ts",
     "query": "node --disable-warning=ExperimentalWarning src/query.ts",
+    "analyze": "node --disable-warning=ExperimentalWarning src/analyze.ts",
+    "research": "node --disable-warning=ExperimentalWarning src/research.ts",
     "db:info": "node --disable-warning=ExperimentalWarning scripts/inspect-db.mjs",
     "check:auth": "node --disable-warning=ExperimentalWarning scripts/check-auth.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test tests/comment-selection.test.ts tests/conversation.test.ts tests/extraction-validator.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/bilibili-search.test.ts tests/comment-selection.test.ts tests/conversation.test.ts tests/deepseek.test.ts tests/extraction-validator.test.ts tests/research-selection.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

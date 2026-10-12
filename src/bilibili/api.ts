@@ -13,6 +13,7 @@ import type {
   BiliCommentPage,
   BiliReply,
   BiliSubCommentData,
+  BiliVideoSearchData,
   BiliVideoInfo,
   CommentRow,
   VideoRow,
@@ -24,6 +25,8 @@ const VIDEO_INFO_API = 'https://api.bilibili.com/x/web-interface/view';
 const COMMENT_MAIN_API = 'https://api.bilibili.com/x/v2/reply/wbi/main';
 /** 楼中楼接口：取某条一级评论下面的所有回复 */
 const COMMENT_SUB_API = 'https://api.bilibili.com/x/v2/reply/reply';
+/** Web 视频搜索接口。当前新版 WBI 搜索可能只返回风控 voucher，因此使用此接口。 */
+const VIDEO_SEARCH_API = 'https://api.bilibili.com/x/web-interface/search/type';
 
 /** BV 号的格式：BV + 10 位大小写字母数字 */
 const BV_PATTERN = /BV[0-9A-Za-z]{10}/;
@@ -35,6 +38,55 @@ export const COMMENT_MODE = {
   /** 按热度排序（3），默认用这个，因为高赞评论里更可能藏有效信息 */
   hot: 3,
 } as const;
+
+export interface VideoSearchResult {
+  bvid: string;
+  title: string;
+  author: string;
+  play: number;
+  review: number;
+  pubdate: number;
+}
+
+function cleanSearchTitle(title: string): string {
+  return title
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
+
+/** 按商品关键词搜索 B站视频，结果顺序沿用站内综合排序。 */
+export async function fetchVideoSearch(
+  client: BiliClient,
+  keyword: string,
+  limit = 3,
+): Promise<VideoSearchResult[]> {
+  const safeLimit = Math.max(1, limit);
+  const data = await client.request<BiliVideoSearchData>(
+    VIDEO_SEARCH_API,
+    { keyword, search_type: 'video', page: 1, order: 'default' },
+    { signed: false, referer: `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}` },
+  );
+
+  const seen = new Set<string>();
+  const rows: VideoSearchResult[] = [];
+  for (const item of data.result ?? []) {
+    if (!item.bvid || seen.has(item.bvid)) continue;
+    seen.add(item.bvid);
+    rows.push({
+      bvid: item.bvid,
+      title: cleanSearchTitle(item.title ?? ''),
+      author: item.author ?? '',
+      play: item.play ?? 0,
+      review: item.review ?? 0,
+      pubdate: item.pubdate ?? 0,
+    });
+    if (rows.length >= safeLimit) break;
+  }
+  return rows;
+}
 
 /**
  * 从用户输入里解析出 BV 号。

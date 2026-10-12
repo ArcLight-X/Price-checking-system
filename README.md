@@ -95,11 +95,38 @@ node src/query.ts export   --video BV1GJ411x7h7 --out data/out.jsonl
 node src/query.ts logs                                        # 抓取流水日志
 ```
 
-### 3）用 npm 脚本跑（等价写法）
+### 3）使用 DeepSeek 分析评论
+
+先在本地 `.env` 中填写：
+
+```text
+DEEPSEEK_API_KEY=你的API密钥
+DEEPSEEK_MODEL=deepseek-flash
+```
+
+然后执行：
+
+```powershell
+npm run analyze -- --video BV1GJ411x7h7 --limit 10
+```
+
+结果默认写入 `data/<BV号>-price-analysis.jsonl`。每行对应一个一级评论对话，包含模型、Token 用量、结构化价格和基础校验结果。
+
+如果只知道商品名称，可以一条命令自动搜索相关视频、抓取评论并分析：
+
+```powershell
+npm run research -- --product "RTX 5070 Ti"
+```
+
+默认处理 3 个视频，每个视频最多分析 10 个包含价格信号的评论对话，结果写入 `data/RTX-5070-Ti-research.jsonl`。
+
+### 4）用 npm 脚本跑（等价写法）
 
 ```powershell
 npm run crawl -- --video BV1GJ411x7h7 --with-replies
 npm run query -- comments --video BV1GJ411x7h7
+npm run analyze -- --video BV1GJ411x7h7 --limit 10
+npm run research -- --product "RTX 5070 Ti"
 npm run check:auth     # 自检 B站登录态（SESSDATA）是否有效
 npm run db:info        # 查看 .db 文件里到底存了什么
 npm test               # Node 原生测试：对话关系与上下文完整性
@@ -275,8 +302,8 @@ SELECT uname, like_count, content
 
 | 阶段 | 内容 |
 |---|---|
-| ✅ **当前** | 抓评论 → 存 SQLite → 对话组装 → LLM 输出契约/Prompt → 证据与金额程序验证 → 评测种子 |
-| 下一步 | 接入具体 LLM API，保存原始响应、模型版本、Token/耗时和验证结果 |
+| ✅ **当前** | 抓评论 → 存 SQLite → 对话组装 → DeepSeek API 抽取 → 证据与金额程序验证 → JSONL 结果 |
+| 下一步 | 根据实际抽取效果调整 Prompt，并筛选更可能包含价格的候选对话以节省 Token |
 | 之后 | 商品对齐（4070ti / 4070 Ti 归一）、置信度打分、时效衰减、跨视频交叉验证 |
 | 之后 | 关键词订阅 + 定时调度（BullMQ）+ 告警推送 |
 | 之后 | 前端价格卡片：`官方价 1999 / 可实现低价 1799 / 方案：京东PLUS + 10点抢券 / 证据链接` |

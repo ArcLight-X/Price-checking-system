@@ -169,3 +169,20 @@ export interface BiliSubCommentData {
   /** 分页信息，page.count 是回复总条数，page.size 是每页条数 */
   page?: { count: number; num: number; size: number };
 }
+
+/** B站视频搜索接口的一条结果。这里只声明项目实际使用的字段。 */
+export interface BiliVideoSearchItem {
+  bvid?: string;
+  title?: string;
+  author?: string;
+  play?: number;
+  review?: number;
+  pubdate?: number;
+}
+
+/** /x/web-interface/search/type 视频搜索响应。 */
+export interface BiliVideoSearchData {
+  numResults?: number;
+  numPages?: number;
+  result?: BiliVideoSearchItem[];
+}
