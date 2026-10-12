@@ -10,15 +10,27 @@ function normalizeProductName(value: string): string {
   return value.toLowerCase().replace(/[\s\-_+·.,，。/\\()[\]（）]/g, '');
 }
 
-/** 排除用户目标型号后面又多出一代数字的标题，例如 MacBook Neo 2。 */
+const ACCESSORY_WORDS = [
+  '充电器', '充电头', '手机壳', '保护壳', '钢化膜', '贴膜',
+  '数据线', '充电线', '支架', '镜头膜', '挂绳', '配件',
+];
+
+const VARIANT_SUFFIXES = ['promax', 'pro', 'plus', 'air', 'mini', 'ultra', 'max'];
+
+/** 排除配件、其他版本和后继型号，只保留用户输入的目标商品。 */
 export function matchesRequestedProduct(title: string, product: string): boolean {
   const normalizedProduct = normalizeProductName(product);
   const normalizedTitle = normalizeProductName(title);
   const position = normalizedTitle.indexOf(normalizedProduct);
   if (position < 0) return false;
 
+  const productIsAccessory = ACCESSORY_WORDS.some((word) => normalizedProduct.includes(word));
+  const titleIsAccessory = ACCESSORY_WORDS.some((word) => normalizedTitle.includes(word));
+  if (!productIsAccessory && titleIsAccessory) return false;
+
   const suffix = normalizedTitle.slice(position + normalizedProduct.length);
-  return !/^[2-9](?!\d|gb|tb|寸|英寸)/.test(suffix);
+  if (/^[2-9](?!\d|gb|tb|寸|英寸)/.test(suffix)) return false;
+  return !VARIANT_SUFFIXES.some((variant) => suffix.startsWith(variant));
 }
 
 const EXPLICIT_AMOUNT_PATTERNS = [

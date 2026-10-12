@@ -46,6 +46,17 @@ test('精确目标商品排除后继数字型号', () => {
   assert.equal(matchesRequestedProduct('RTX 5070 Ti 好价是多少', 'RTX 5070 Ti'), true);
 });
 
+test('精确目标商品排除配件和其他版本', () => {
+  assert.equal(matchesRequestedProduct('iPhone 17价格和购买建议', 'iPhone 17'), true);
+  assert.equal(matchesRequestedProduct('iPhone 17充电器怎么选', 'iPhone 17'), false);
+  assert.equal(matchesRequestedProduct('适配iPhone 17的手机壳推荐', 'iPhone 17'), false);
+  assert.equal(matchesRequestedProduct('iPhone 17 Pro价格分析', 'iPhone 17'), false);
+  assert.equal(matchesRequestedProduct('iPhone 17 Pro Max首发价', 'iPhone 17'), false);
+  assert.equal(matchesRequestedProduct('iPhone 17 Plus值不值', 'iPhone 17'), false);
+  assert.equal(matchesRequestedProduct('iPhone 17充电器价格', 'iPhone 17充电器'), true);
+  assert.equal(matchesRequestedProduct('iPhone 17 Pro价格', 'iPhone 17 Pro'), true);
+});
+
 test('商品研究只保留价格候选并优先完整命中目标型号', () => {
   const selected = selectResearchConversations([
     conversation('C001', '这个视频讲得很好', 1000),
