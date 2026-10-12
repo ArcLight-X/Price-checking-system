@@ -56,55 +56,61 @@ export function createDeepSeekClient(options: DeepSeekClientOptions): {
 
   return {
     async extractJson(prompt: DeepSeekPrompt): Promise<DeepSeekResult> {
-      const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: prompt.system },
-            { role: 'user', content: prompt.user },
-          ],
-          response_format: { type: 'json_object' },
-          temperature: 0,
-          max_tokens: 4096,
-          stream: false,
-        }),
-      });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: prompt.system },
+              { role: 'user', content: prompt.user },
+            ],
+            response_format: { type: 'json_object' },
+            temperature: 0,
+            max_tokens: 4096,
+            stream: false,
+          }),
+        });
 
-      const responseText = await response.text();
-      if (!response.ok) {
-        throw new Error(`DeepSeek API 请求失败（HTTP ${response.status}）：${responseText.slice(0, 500)}`);
+        const responseText = await response.text();
+        if (!response.ok) {
+          throw new Error(`DeepSeek API 请求失败（HTTP ${response.status}）：${responseText.slice(0, 500)}`);
+        }
+
+        let data: DeepSeekResponse;
+        try {
+          data = JSON.parse(responseText) as DeepSeekResponse;
+        } catch {
+          throw new Error('DeepSeek API 返回了无法解析的响应');
+        }
+
+        const choice = data.choices?.[0];
+        const content = choice?.message?.content?.trim() ?? '';
+        if (!content) {
+          if (attempt === 0) continue;
+          throw new Error('DeepSeek API 连续两次返回空内容');
+        }
+        if (choice?.finish_reason === 'length') {
+          throw new Error('DeepSeek 输出因长度限制被截断，请减少单次对话内容或提高 max_tokens');
+        }
+
+        return {
+          requestId: data.id ?? null,
+          model: data.model ?? model,
+          content,
+          finishReason: choice?.finish_reason ?? null,
+          usage: {
+            promptTokens: data.usage?.prompt_tokens ?? null,
+            completionTokens: data.usage?.completion_tokens ?? null,
+            totalTokens: data.usage?.total_tokens ?? null,
+          },
+        };
       }
-
-      let data: DeepSeekResponse;
-      try {
-        data = JSON.parse(responseText) as DeepSeekResponse;
-      } catch {
-        throw new Error('DeepSeek API 返回了无法解析的响应');
-      }
-
-      const choice = data.choices?.[0];
-      const content = choice?.message?.content?.trim() ?? '';
-      if (!content) throw new Error('DeepSeek API 返回了空内容，请重试');
-      if (choice?.finish_reason === 'length') {
-        throw new Error('DeepSeek 输出因长度限制被截断，请减少单次对话内容或提高 max_tokens');
-      }
-
-      return {
-        requestId: data.id ?? null,
-        model: data.model ?? model,
-        content,
-        finishReason: choice?.finish_reason ?? null,
-        usage: {
-          promptTokens: data.usage?.prompt_tokens ?? null,
-          completionTokens: data.usage?.completion_tokens ?? null,
-          totalTokens: data.usage?.total_tokens ?? null,
-        },
-      };
+      throw new Error('DeepSeek API 返回了空内容');
     },
   };
 }

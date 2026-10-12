@@ -241,18 +241,19 @@ export function validatePriceExtraction(
   }
 
   const hasError = issues.some((issue) => issue.severity === 'error');
-  if (hasError) return { ok: false, value: null, issues };
-
-  return {
-    ok: true,
-    value: {
+  const value: PriceExtraction = {
       schemaVersion: EXTRACTION_SCHEMA_VERSION,
       conversationLabel: conversation.conversationLabel,
       contextStatus: conversation.contextStatus,
-      hasPriceClaim: input['hasPriceClaim'] as boolean,
+      hasPriceClaim: claims.length > 0,
       claims,
-      notes: input['notes'] as string[],
-    },
+      notes: Array.isArray(input['notes']) ? input['notes'].filter((note): note is string => typeof note === 'string') : [],
+  };
+  if (hasError) return { ok: false, value: claims.length > 0 ? value : null, issues };
+
+  return {
+    ok: true,
+    value,
     issues,
   };
 }

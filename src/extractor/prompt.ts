@@ -22,7 +22,12 @@ export function buildPriceExtractionPrompt(
 6. 评论证据默认只能是 historical_report 或 unverified，绝不能仅凭评论标成 currently_verified。
 7. contextStatus 不是 complete 时要在 verification.reasons 中说明上下文不完整。
 8. 只输出与目标商品相符的价格；评论提到其他商品时不要混入。
-9. 只输出一个 JSON 对象，不要 Markdown，不要解释。`;
+9. claimKind 只能是 reported_transaction、page_offer、question、joke、unknown 之一。
+10. verification.status 只能是 historical_report、unverified、rejected；仅凭评论禁止 currently_verified。
+11. 明确成交且没有任何必需额外费用时，extraCostTotal=0，totalCost=reportedPaidPrice；不能把组成未知的金额直接填入 totalCost。
+12. conditions.type 只能是 membership、coupon、flash_sale、payment、trade_in、other 之一；限时活动使用 flash_sale。
+13. extraFees.type 只能是 membership、shipping、service、other 之一。
+14. 只输出一个 JSON 对象，不要 Markdown，不要解释。`;
 
   const outputShape = {
     schemaVersion: EXTRACTION_SCHEMA_VERSION,

@@ -114,6 +114,18 @@ test('必需费用金额未知时禁止编造总成本', () => {
   assert.ok(result.issues.some((issue) => issue.code === 'unknown_required_fee'));
 });
 
+test('一条 claim 不合规时仍保留同组中已通过验证的 claim', () => {
+  const valid = validExtraction().claims[0]!;
+  const invalid = structuredClone(valid);
+  invalid.conditions = [{ type: 'limited_time' as never, description: '最后两小时', required: true }];
+  const input = validExtraction();
+  input.claims = [valid, invalid];
+  const result = validatePriceExtraction(input, conversation());
+  assert.equal(result.ok, false);
+  assert.equal(result.value?.claims.length, 1);
+  assert.ok(result.issues.some((issue) => issue.code === 'invalid_condition_type'));
+});
+
 test('截断上下文中的历史报告保留但发出人工复核警告', () => {
   const input = validExtraction();
   input.contextStatus = 'truncated';
@@ -140,6 +152,9 @@ test('Prompt 强制未知值、逐字证据和禁止评论冒充当前核验', (
   assert.match(prompt.system, /缺失时填 null 或 \[\]/);
   assert.match(prompt.system, /逐字摘自/);
   assert.match(prompt.system, /绝不能仅凭评论标成 currently_verified/);
+  assert.match(prompt.system, /claimKind 只能是 reported_transaction/);
+  assert.match(prompt.system, /extraCostTotal=0/);
+  assert.match(prompt.system, /conditions.type 只能是 membership/);
   assert.match(prompt.user, /contextStatus|上下文状态：truncated/);
   assert.match(prompt.user, /还要10元运费/);
   assert.match(prompt.user, /目标商品：RTX 5070 Ti/);

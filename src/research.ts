@@ -13,7 +13,7 @@ import { insertComments, openDb, upsertVideo } from './db.ts';
 import { buildPriceExtractionPrompt } from './extractor/prompt.ts';
 import { validatePriceExtraction } from './extractor/validator.ts';
 import { selectResearchConversations } from './research-selection.ts';
-import type { CommentRow } from './types.ts';
+import type { PriceClaim } from './extractor/types.ts';
 
 const HELP_TEXT = `
 输入商品名称，自动搜索 B站视频、抓取评论并使用 DeepSeek 分析价格
@@ -45,20 +45,96 @@ function safeFileName(value: string): string {
   return cleaned.slice(0, 80) || 'product';
 }
 
-function toConversationRow(row: CommentRow): ConversationSourceRow {
-  return {
-    rpid: row.rpid,
-    parent: row.parent,
-    root: row.root,
-    is_root: row.isRoot ? 1 : 0,
-    uname: row.uname,
-    content: row.content,
-    ctime: row.ctime,
-    like_count: row.likeCount,
-    sub_count: row.subCount,
-    sub_fetched_count: row.subFetchedCount,
-    sub_context_complete: row.subContextComplete === null ? null : row.subContextComplete ? 1 : 0,
-  };
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/[\s\-_+·.,，。/\\()[\]（）]/g, '');
+}
+
+function productParts(value: string): string[] {
+  return value.toLowerCase().match(/[a-z]+|\d+[a-z]*|[\u4e00-\u9fff]{2,}/g) ?? [];
+}
+
+function loadStoredVideos(
+  db: ReturnType<typeof openDb>,
+): Awaited<ReturnType<typeof fetchVideoSearch>> {
+  const rows = db.prepare(
+    `SELECT bvid, title, up_name AS author, view_count AS play,
+            reply_count AS review, pubdate
+       FROM videos`,
+  ).all() as Array<{
+    bvid: string;
+    title: string;
+    author: string;
+    play: number;
+    review: number;
+    pubdate: number;
+  }>;
+  return rows;
+}
+
+async function searchResearchVideos(
+  client: ReturnType<typeof createBiliClient>,
+  db: ReturnType<typeof openDb>,
+  product: string,
+  limit: number,
+): Promise<Awaited<ReturnType<typeof fetchVideoSearch>>> {
+  const keywords = [`${product} 价格`, `${product} 好价`, `${product} 入手价`];
+  const rows: Awaited<ReturnType<typeof fetchVideoSearch>> = [];
+  for (const keyword of keywords) {
+    rows.push(...await fetchVideoSearch(client, keyword, limit));
+  }
+  rows.push(...loadStoredVideos(db));
+  const unique = new Map(rows.map((row) => [row.bvid, row]));
+  const normalizedProduct = normalizeSearchText(product);
+  const targetParts = productParts(product).map(normalizeSearchText).filter((part) => part.length >= 2);
+  return [...unique.values()]
+    .map((row) => {
+      const title = normalizeSearchText(row.title);
+      const productMatch = title.includes(normalizedProduct);
+      const matchedParts = targetParts.filter((part) => title.includes(part)).length;
+      const priceIntent = /价格|好价|低价|入手|到手|多少钱|选购|优惠|双十一|618/i.test(row.title);
+      const storedRows = loadStoredConversationRows(db, row.bvid);
+      const hasStoredPriceCandidate = storedRows.length > 0
+        && selectResearchConversations(assembleConversations(storedRows), product, 1).length > 0;
+      return {
+        row,
+        matchedParts,
+        score: (hasStoredPriceCandidate ? 100 : 0) + (productMatch ? 20 : 0)
+          + matchedParts * 4 + (priceIntent ? 10 : 0) + Math.log10(row.review + 1),
+      };
+    })
+    .filter((item) => item.matchedParts > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((item) => item.row);
+}
+
+function loadStoredConversationRows(
+  db: ReturnType<typeof openDb>,
+  bvid: string,
+): ConversationSourceRow[] {
+  return db.prepare(
+    `SELECT rpid, parent, root, is_root, uname, content, ctime, like_count,
+            sub_count, sub_fetched_count, sub_context_complete
+       FROM comments
+      WHERE bvid = ?
+      ORDER BY is_root DESC, ctime ASC, rpid ASC`,
+  ).all(bvid) as unknown as ConversationSourceRow[];
+}
+
+function displayAmount(claim: PriceClaim): string {
+  const amount = claim.amounts.totalCost
+    ?? claim.amounts.reportedPaidPrice
+    ?? claim.amounts.pagePrice;
+  return amount === null ? '金额未知' : `¥${amount}`;
+}
+
+function displayPlan(claim: PriceClaim): string {
+  const parts = [
+    claim.channel,
+    ...claim.conditions.map((condition) => condition.description),
+    ...claim.extraFees.map((fee) => fee.description),
+  ].filter((value): value is string => Boolean(value?.trim()));
+  return parts.length > 0 ? parts.join('；') : '未提及具体方案';
 }
 
 async function main(): Promise<void> {
@@ -112,11 +188,13 @@ async function main(): Promise<void> {
   });
   const db = openDb(dbFile);
   const outputLines: string[] = [];
+  const summaryRows: Record<string, unknown>[] = [];
+  let failedCount = 0;
+  let analyzedCount = 0;
 
   try {
-    const searchKeyword = `${product} 价格`;
-    console.log(`搜索商品相关视频：${searchKeyword}`);
-    const videos = await fetchVideoSearch(biliClient, searchKeyword, videoLimit);
+    console.log(`搜索商品相关视频：${product}（价格 / 好价 / 入手价）`);
+    const videos = await searchResearchVideos(biliClient, db, product, videoLimit);
     if (videos.length === 0) throw new Error(`B站没有返回与“${product}”相关的视频`);
 
     console.table(videos.map((video, index) => ({
@@ -141,7 +219,9 @@ async function main(): Promise<void> {
         upsertVideo(db, crawled.video);
         insertComments(db, crawled.rows);
 
-        const conversations = assembleConversations(crawled.rows.map(toConversationRow));
+        // 使用数据库中该视频的全部历史抓取结果，避免接口临时只返回少量评论时丢掉已有楼中楼。
+        const storedRows = loadStoredConversationRows(db, searchVideo.bvid);
+        const conversations = assembleConversations(storedRows);
         const candidates = selectResearchConversations(conversations, product, conversationLimit);
         console.log(
           `  抓取 ${crawled.selection.rows.length} 条一级评论，组装 ${conversations.length} 个对话，`
@@ -169,6 +249,7 @@ async function main(): Promise<void> {
               videoTitle: crawled.video.title,
             }));
             const validation = validatePriceExtraction(parseModelJson(response.content), conversation);
+            analyzedCount += 1;
             outputLines.push(JSON.stringify({
               product,
               bvid: searchVideo.bvid,
@@ -182,8 +263,22 @@ async function main(): Promise<void> {
               ok: validation.ok,
               extraction: validation.value,
               issues: validation.issues,
+              rawModelOutput: validation.ok ? undefined : response.content,
             }));
+            for (const claim of validation.value?.claims ?? []) {
+              summaryRows.push({
+                商品: [claim.product.brand, claim.product.name, claim.product.model, claim.product.variant]
+                  .filter(Boolean).join(' ') || product,
+                价格: displayAmount(claim),
+                渠道与方案: displayPlan(claim),
+                时间: claim.purchaseTime ?? '未提及',
+                状态: claim.verification.status,
+                证据: claim.evidence.map((evidence) => evidence.quote).join('｜'),
+                视频: searchVideo.bvid,
+              });
+            }
           } catch (error) {
+            failedCount += 1;
             outputLines.push(JSON.stringify({
               product,
               bvid: searchVideo.bvid,
@@ -211,7 +306,15 @@ async function main(): Promise<void> {
 
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(outPath, `${outputLines.join('\n')}\n`, 'utf8');
-    console.log(`\n商品研究完成：${outPath}`);
+    console.log('\n价格与购买方案摘要：');
+    if (summaryRows.length > 0) {
+      console.table(summaryRows);
+      console.log('注意：以上来自评论历史报告或未核验线索，不代表当前仍可购买。');
+    } else {
+      console.log(`没有提取到明确价格。已分析 ${analyzedCount} 个候选，对话失败 ${failedCount} 个。`);
+      console.log('可以提高 --video-limit、--hot-limit、--recent-limit 或 --conversation-limit 后重试。');
+    }
+    console.log(`完整结果：${outPath}`);
   } finally {
     db.close();
   }

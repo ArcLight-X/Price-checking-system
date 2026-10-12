@@ -29,3 +29,20 @@ test('DeepSeek 客户端发送 JSON Output 请求并读取结果', async () => {
   assert.deepEqual(result.usage, { promptTokens: 10, completionTokens: 5, totalTokens: 15 });
   assert.deepEqual(requestBody?.['response_format'], { type: 'json_object' });
 });
+
+test('DeepSeek 首次返回空内容时自动重试一次', async () => {
+  let calls = 0;
+  const fetchImpl: typeof fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      choices: [{ finish_reason: 'stop', message: { content: calls === 1 ? '' : '{"claims":[]}' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  const result = await createDeepSeekClient({ apiKey: 'test-key', fetchImpl }).extractJson({
+    system: '输出 JSON',
+    user: '测试',
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.content, '{"claims":[]}');
+});
