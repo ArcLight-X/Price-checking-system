@@ -7,7 +7,7 @@ import { fetchVideoSearch } from './bilibili/api.ts';
 import { createBiliClient } from './bilibili/client.ts';
 import { crawlVideoComments } from './comment-crawler.ts';
 import { PROJECT_ROOT, loadConfig } from './config.ts';
-import { assembleConversations, type ConversationSourceRow } from './conversation.ts';
+import { assembleConversations, type CommentConversation, type ConversationSourceRow } from './conversation.ts';
 import { createDeepSeekClient, parseModelJson } from './deepseek.ts';
 import { insertComments, openDb, upsertVideo } from './db.ts';
 import { buildPriceExtractionPrompt } from './extractor/prompt.ts';
@@ -94,7 +94,9 @@ async function searchResearchVideos(
       const priceIntent = /价格|好价|低价|入手|到手|多少钱|选购|优惠|双十一|618/i.test(row.title);
       const storedRows = loadStoredConversationRows(db, row.bvid);
       const hasStoredPriceCandidate = storedRows.length > 0
-        && selectResearchConversations(assembleConversations(storedRows), product, 1).length > 0;
+        && selectResearchConversations(
+          assembleConversations(storedRows), product, 1, { videoTitle: row.title },
+        ).length > 0;
       return {
         row,
         matchedParts,
@@ -121,11 +123,39 @@ function loadStoredConversationRows(
   ).all(bvid) as unknown as ConversationSourceRow[];
 }
 
+function createVideoTitleConversation(title: string): CommentConversation {
+  return {
+    conversationLabel: 'V001',
+    rootRpid: 'video-title',
+    expectedReplyCount: 0,
+    storedReplyCount: 0,
+    contextStatus: 'complete',
+    messages: [{
+      label: 'V001',
+      rpid: 'video-title',
+      parentRpid: null,
+      parentLabel: null,
+      relation: 'root',
+      uname: '视频标题',
+      content: title,
+      ctime: 0,
+      timeIso: 'unknown',
+      likeCount: 0,
+    }],
+    text: `[V001] 视频标题: ${title}`,
+  };
+}
+
 function displayAmount(claim: PriceClaim): string {
   const amount = claim.amounts.totalCost
     ?? claim.amounts.reportedPaidPrice
     ?? claim.amounts.pagePrice;
-  return amount === null ? '金额未知' : `¥${amount}`;
+  if (amount === null) return '金额未知';
+  const symbols: Record<NonNullable<PriceClaim['amounts']['currency']>, string> = {
+    CNY: '¥', USD: '$', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', TWD: 'NT$',
+  };
+  const currency = claim.amounts.currency;
+  return currency ? `${symbols[currency]}${amount}` : `${amount}（币种未明）`;
 }
 
 function displayPlan(claim: PriceClaim): string {
@@ -222,10 +252,16 @@ async function main(): Promise<void> {
         // 使用数据库中该视频的全部历史抓取结果，避免接口临时只返回少量评论时丢掉已有楼中楼。
         const storedRows = loadStoredConversationRows(db, searchVideo.bvid);
         const conversations = assembleConversations(storedRows);
-        const candidates = selectResearchConversations(conversations, product, conversationLimit);
+        const titleCandidates = selectResearchConversations(
+          [createVideoTitleConversation(crawled.video.title)], product, 1,
+        );
+        const commentCandidates = selectResearchConversations(
+          conversations, product, conversationLimit, { videoTitle: crawled.video.title },
+        );
+        const candidates = [...titleCandidates, ...commentCandidates].slice(0, conversationLimit);
         console.log(
           `  抓取 ${crawled.selection.rows.length} 条一级评论，组装 ${conversations.length} 个对话，`
-          + `筛出 ${candidates.length} 个价格候选`,
+          + `筛出 ${candidates.length} 个价格候选${titleCandidates.length > 0 ? '（含视频标题价格）' : ''}`,
         );
 
         if (candidates.length === 0) {

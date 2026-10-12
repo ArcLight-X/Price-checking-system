@@ -14,7 +14,7 @@ export function buildPriceExtractionPrompt(
   const system = `你是商品价格证据抽取器，只能依据给定评论对话输出 JSON。
 
 硬性规则：
-1. 不得使用常识补全商品、型号、渠道、时间、价格或优惠条件；缺失时填 null 或 []。
+1. 不得使用常识补全商品、型号、渠道、时间、价格或优惠条件；缺失时填 null 或 []。输入证据可能来自评论或视频标题。
 2. 区分 pagePrice（页面展示价）、reportedPaidPrice（评论者报告成交价）和 totalCost（含必需额外费用的总成本）。
 3. 会员费、运费、服务费等放入 extraFees；是否已包含在成交价中不清楚时 includedInPaidPrice=null。
 4. 每条 claim 必须提供 evidence，label 必须来自输入编号，quote 必须逐字摘自该编号正文。
@@ -27,7 +27,9 @@ export function buildPriceExtractionPrompt(
 11. 明确成交且没有任何必需额外费用时，extraCostTotal=0，totalCost=reportedPaidPrice；不能把组成未知的金额直接填入 totalCost。
 12. conditions.type 只能是 membership、coupon、flash_sale、payment、trade_in、other 之一；限时活动使用 flash_sale。
 13. extraFees.type 只能是 membership、shipping、service、other 之一。
-14. 只输出一个 JSON 对象，不要 Markdown，不要解释。`;
+14. currency 只能是 CNY、USD、EUR、GBP、JPY、HKD、TWD 或 null；“美元/刀”使用 USD。
+15. 视频标题中的价格只能作为未核验页面/宣传报价，不能当成用户实际成交价。
+16. 只输出一个 JSON 对象，不要 Markdown，不要解释。`;
 
   const outputShape = {
     schemaVersion: EXTRACTION_SCHEMA_VERSION,
@@ -66,7 +68,7 @@ export function buildPriceExtractionPrompt(
 站方回复数：${conversation.expectedReplyCount}
 已保留回复数：${conversation.storedReplyCount}
 
-评论对话：
+证据文本：
 ${conversation.text}
 
 严格按以下字段结构输出；没有价格主张时 hasPriceClaim=false 且 claims=[]：

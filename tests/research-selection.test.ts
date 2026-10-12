@@ -51,3 +51,34 @@ test('识别评论区常见的省略货币单位口语价格', () => {
     new Set(['C001', 'C002', 'C003', 'C004']),
   );
 });
+
+test('识别中文千位模糊价格', () => {
+  const selected = selectResearchConversations([
+    conversation('C001', '如何两千多买苹果MacBook Neo'),
+    conversation('C002', '正常应该是三千多的价格'),
+    conversation('C003', '4千多该喷，2千多就很不错了'),
+  ], 'MacBook Neo', 10, { videoTitle: 'MacBook Neo购买指南' });
+
+  assert.deepEqual(
+    new Set(selected.map((item) => item.conversationLabel)),
+    new Set(['C001', 'C002']),
+  );
+});
+
+test('目标商品视频中的购买方案评论可以继承视频商品信号', () => {
+  const selected = selectResearchConversations([
+    conversation('C001', '某东教育优惠加国补，3399可以直接到手'),
+    conversation('C002', 'iPad 11屏幕不错'),
+  ], 'MacBook Neo', 10, { videoTitle: 'MacBook Neo 低价购买实操' });
+
+  assert.deepEqual(selected.map((item) => item.conversationLabel), ['C001']);
+});
+
+test('识别标题中的金额在前购买词在后表达', () => {
+  const selected = selectResearchConversations([
+    conversation('V001', 'MacBook Neo叠满优惠2999到手'),
+    conversation('V002', '如何两千多买苹果MacBook Neo'),
+  ], 'MacBook Neo', 10);
+
+  assert.deepEqual(selected.map((item) => item.conversationLabel), ['V001', 'V002']);
+});

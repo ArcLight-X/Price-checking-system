@@ -67,6 +67,22 @@ test('接受证据存在且金额可复算的历史成交报告', () => {
   assert.deepEqual(result.issues, []);
 });
 
+test('接受评论中明确标注的美元价格', () => {
+  const input = validExtraction();
+  input.claims[0]!.amounts = {
+    pagePrice: 699,
+    reportedPaidPrice: null,
+    extraCostTotal: null,
+    totalCost: null,
+    currency: 'USD',
+  };
+  input.claims[0]!.claimKind = 'page_offer';
+  input.claims[0]!.verification.status = 'unverified';
+  const result = validatePriceExtraction(input, conversation());
+  assert.equal(result.ok, true);
+  assert.equal(result.value?.claims[0]?.amounts.currency, 'USD');
+});
+
 test('仅凭评论禁止标记为当前可实现低价', () => {
   const input = validExtraction();
   input.claims[0]!.verification.status = 'currently_verified';
@@ -155,6 +171,7 @@ test('Prompt 强制未知值、逐字证据和禁止评论冒充当前核验', (
   assert.match(prompt.system, /claimKind 只能是 reported_transaction/);
   assert.match(prompt.system, /extraCostTotal=0/);
   assert.match(prompt.system, /conditions.type 只能是 membership/);
+  assert.match(prompt.system, /currency 只能是 CNY、USD/);
   assert.match(prompt.user, /contextStatus|上下文状态：truncated/);
   assert.match(prompt.user, /还要10元运费/);
   assert.match(prompt.user, /目标商品：RTX 5070 Ti/);

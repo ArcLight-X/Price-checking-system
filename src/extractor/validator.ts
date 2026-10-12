@@ -3,6 +3,7 @@ import {
   EXTRACTION_SCHEMA_VERSION,
   type ClaimKind,
   type ConditionType,
+  type Currency,
   type ExtraFeeType,
   type ExtractionValidationResult,
   type PriceClaim,
@@ -15,6 +16,7 @@ const CLAIM_KINDS = new Set<ClaimKind>(['reported_transaction', 'page_offer', 'q
 const VERIFICATION_STATUSES = new Set<VerificationStatus>(['historical_report', 'unverified', 'currently_verified', 'rejected']);
 const CONDITION_TYPES = new Set<ConditionType>(['membership', 'coupon', 'flash_sale', 'payment', 'trade_in', 'other']);
 const EXTRA_FEE_TYPES = new Set<ExtraFeeType>(['membership', 'shipping', 'service', 'other']);
+const CURRENCIES = new Set<Currency>(['CNY', 'USD', 'EUR', 'GBP', 'JPY', 'HKD', 'TWD']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -112,8 +114,8 @@ export function validatePriceExtraction(
           addIssue(issues, 'error', `${path}.amounts.${field}`, 'invalid_money', '必须是非负有限数字或 null');
         }
       }
-      if (amounts['currency'] !== null && amounts['currency'] !== 'CNY') {
-        addIssue(issues, 'error', `${path}.amounts.currency`, 'invalid_currency', '目前只接受 CNY 或 null');
+      if (amounts['currency'] !== null && !CURRENCIES.has(amounts['currency'] as Currency)) {
+        addIssue(issues, 'error', `${path}.amounts.currency`, 'invalid_currency', '币种必须是 CNY、USD、EUR、GBP、JPY、HKD、TWD 或 null');
       }
       if (!isNullableString(rawClaim['channel'])) {
         addIssue(issues, 'error', `${path}.channel`, 'invalid_nullable_string', '必须是字符串或 null');

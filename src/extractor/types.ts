@@ -3,7 +3,7 @@ import type { ConversationContextStatus } from '../conversation.ts';
 /** 模型输出协议版本。后续字段变更时通过版本号做兼容。 */
 export const EXTRACTION_SCHEMA_VERSION = '1.0' as const;
 
-export type Currency = 'CNY';
+export type Currency = 'CNY' | 'USD' | 'EUR' | 'GBP' | 'JPY' | 'HKD' | 'TWD';
 export type ClaimKind = 'reported_transaction' | 'page_offer' | 'question' | 'joke' | 'unknown';
 export type VerificationStatus = 'historical_report' | 'unverified' | 'currently_verified' | 'rejected';
 export type ConditionType = 'membership' | 'coupon' | 'flash_sale' | 'payment' | 'trade_in' | 'other';
