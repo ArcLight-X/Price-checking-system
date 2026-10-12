@@ -1,0 +1,10 @@
+{
+  // 本项目所有文件统一用 UTF-8 打开
+  "files.encoding": "utf8",
+  // 关闭「自动猜测编码」，避免中文较多的文件被误判成其他编码
+  "files.autoGuessEncoding": false,
+  // 集成终端里的 node 进程统一带上该参数，屏蔽 node:sqlite 的实验性警告
+  "terminal.integrated.env.windows": {
+    "NODE_OPTIONS": "--disable-warning=ExperimentalWarning"
+  }
+}
