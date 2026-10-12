@@ -12,7 +12,7 @@
     "query": "node --disable-warning=ExperimentalWarning src/query.ts",
     "db:info": "node --disable-warning=ExperimentalWarning scripts/inspect-db.mjs",
     "check:auth": "node --disable-warning=ExperimentalWarning scripts/check-auth.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test tests/conversation.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/comment-selection.test.ts tests/conversation.test.ts tests/extraction-validator.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

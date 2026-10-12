@@ -1,8 +1,8 @@
 # ex_mall · 评论区价格信息采集系统
 
-> **当前阶段：第 0 步 —— 跑通「抓取 B站某个视频的评论区 → 存入本地数据库 → 可再次读取」的最小闭环。**
+> **当前阶段：已完成双流评论采集、可审计对话组装，以及价格抽取的 LLM 契约与程序验证器。**
 >
-> 后续阶段才是在这批评论上做价格抽取（把「1799 拿下，买了京东会员+10点抢券」变成结构化数据）。
+> 安全边界：评论中的价格只能作为历史报告或未核验线索；未经外部核验，不能标为“当前可实现低价”。
 
 ---
 
@@ -41,6 +41,8 @@ ex_mall/
 ├─ .editorconfig         跨编辑器统一编码（UTF-8）与缩进约定
 ├─ .vscode/settings.json 编辑器统一按 UTF-8 打开本项目文件
 ├─ README.md             本文件
+├─ evals/                价格抽取人工评测种子（JSONL）
+├─ tests/                对话、评论选择和抽取验证器测试
 ├─ data/                 运行时生成：bilibili.db + 导出的 jsonl（已 git 忽略）
 ├─ scripts/
 │  └─ inspect-db.mjs     只读脚本：查看 .db 文件里到底存了什么（npx 或 node 直接跑）
@@ -48,8 +50,11 @@ ex_mall/
    ├─ config.ts          配置集中管理，读 .env
    ├─ types.ts           所有类型定义（数据库行 + B站接口结构）
    ├─ db.ts              SQLite 建表 / 写入封装（videos、comments、crawl_logs）
+   ├─ comment-selection.ts 热门/最新两条候选流的排序、限额与去重
+   ├─ conversation.ts    组装稳定编号、回复关系和上下文完整性
    ├─ crawl.ts           【入口 1】抓取：视频信息 + 评论区 → 数据库
    ├─ query.ts           【入口 2】读取：查视频 / 查评论 / 正则搜索 / 导出
+   ├─ extractor/         LLM Prompt、输出类型及证据/金额验证器
    └─ bilibili/
       ├─ wbi.ts          WBI 签名算法（B站反爬核心，单独隔离便于日后维护）
       ├─ client.ts       HTTP 客户端：限速 + Cookie + 签名 + 重试 + 错误分类
@@ -63,11 +68,14 @@ ex_mall/
 ### 1）抓取（默认会创建 `data/bilibili.db`）
 
 ```powershell
-# 抓 3 页主评论（每页 20 条）
+# 默认抓点赞较高的 50 条一级评论 + 时间最新的 30 条，按评论 id 去重
 node src/crawl.ts --video BV1GJ411x7h7
 
-# 抓 5 页，并顺带把楼中楼回复也抓下来（价格方案常藏在「怎么买的？」的问答里）
-node src/crawl.ts --video BV1GJ411x7h7 --pages 5 --with-replies
+# 顺带展开每条一级评论下的前 20 条楼中楼（价格方案常藏在问答里）
+node src/crawl.ts --video BV1GJ411x7h7 --with-replies
+
+# 也可以调整三组条数
+node src/crawl.ts --video BV1GJ411x7h7 --hot-limit 60 --recent-limit 40 --with-replies --sub-limit 20
 
 # 也可以直接粘视频链接，或用 b23.tv 短链
 node src/crawl.ts --video "https://www.bilibili.com/video/BV1GJ411x7h7"
@@ -90,7 +98,7 @@ node src/query.ts logs                                        # 抓取流水日�
 ### 3）用 npm 脚本跑（等价写法）
 
 ```powershell
-npm run crawl -- --video BV1GJ411x7h7 --pages 3
+npm run crawl -- --video BV1GJ411x7h7 --with-replies
 npm run query -- comments --video BV1GJ411x7h7
 npm run check:auth     # 自检 B站登录态（SESSDATA）是否有效
 npm run db:info        # 查看 .db 文件里到底存了什么
@@ -206,10 +214,10 @@ SELECT uname, like_count, content
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--video` | 必填 | BV 号 / 视频链接 / b23.tv 短链 |
-| `--pages` | 3 | 最多抓多少页主评论 |
-| `--mode` | 3 | `3` = 热度排序，`2` = 时间排序 |
+| `--hot-limit` | 50 | 按点赞数选择多少条热门一级评论 |
+| `--recent-limit` | 30 | 按发布时间选择多少条最新一级评论 |
 | `--with-replies` | 关闭 | 是否展开楼中楼 |
-| `--sub-pages` | 5 | 每条一级评论最多抓多少页楼中楼 |
+| `--sub-limit` | 20 | 每条一级评论下只保留前多少条楼中楼；超过后标记为截断 |
 | `--db` | `data/bilibili.db` | 数据库文件路径 |
 
 ### `query.ts`
@@ -267,8 +275,31 @@ SELECT uname, like_count, content
 
 | 阶段 | 内容 |
 |---|---|
-| ✅ **当前** | 抓评论 → 存 SQLite → 组装可审计对话 → Node 原生测试 |
-| 下一步 | 在 `src/extractor/` 下做价格抽取：LLM 结构化 + JSON/证据/金额程序验证；未知字段保持未知 |
+| ✅ **当前** | 抓评论 → 存 SQLite → 对话组装 → LLM 输出契约/Prompt → 证据与金额程序验证 → 评测种子 |
+| 下一步 | 接入具体 LLM API，保存原始响应、模型版本、Token/耗时和验证结果 |
 | 之后 | 商品对齐（4070ti / 4070 Ti 归一）、置信度打分、时效衰减、跨视频交叉验证 |
 | 之后 | 关键词订阅 + 定时调度（BullMQ）+ 告警推送 |
 | 之后 | 前端价格卡片：`官方价 1999 / 可实现低价 1799 / 方案：京东PLUS + 10点抢券 / 证据链接` |
+
+---
+
+## 十二、价格抽取契约与安全边界
+
+第二阶段基础代码位于 `src/extractor/`：
+
+| 文件 | 职责 |
+|---|---|
+| `types.ts` | 定义商品、页面价、报告成交价、额外费用、购买条件、证据和核验状态 |
+| `prompt.ts` | 把一个可审计对话组装为供应商无关的 LLM system/user Prompt |
+| `validator.ts` | 不信任模型输出，验证 JSON 结构、证据原文、金额计算和核验状态 |
+| `evals/price-cases.jsonl` | 人工评测种子：历史价、玩笑、型号混淆、会员成本、运费和上下文缺失 |
+
+核心规则：
+
+1. 缺失信息只能写 `null` 或 `[]`，不能用常识补全。
+2. `pagePrice`（页面价）、`reportedPaidPrice`（评论报告成交价）和 `totalCost`（含必需额外费用）必须分开。
+3. 证据编号必须存在，引用内容必须逐字出现在对应评论中。
+4. `totalCost = reportedPaidPrice + extraCostTotal`，额外费用合计还要与费用明细一致。
+5. 存在金额未知的必需会员费/运费时，不能编造 `extraCostTotal` 或 `totalCost`。
+6. 评论成交价默认只能标成 `historical_report` 或 `unverified`；**仅凭评论永远不能标成 `currently_verified`**。
+7. 楼中楼默认只保留前 20 条；超过时对话为 `truncated`，历史报告需要人工复核。

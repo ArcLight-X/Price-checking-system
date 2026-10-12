@@ -166,6 +166,6 @@ export interface BiliCommentPage {
 export interface BiliSubCommentData {
   /** 楼中楼列表 */
   replies: BiliReply[] | null;
-  /** 分页信息，page.count 是总页数，page.size 是每页条数 */
+  /** 分页信息，page.count 是回复总条数，page.size 是每页条数 */
   page?: { count: number; num: number; size: number };
 }

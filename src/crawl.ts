@@ -3,16 +3,16 @@
  *
  * 【用法示例】
  *   node src/crawl.ts --video BV1GJ411x7h7
- *   node src/crawl.ts --video https://www.bilibili.com/video/BV1GJ411x7h7 --pages 5
- *   node src/crawl.ts --video BV1GJ411x7h7 --mode 2 --with-replies
+ *   node src/crawl.ts --video https://www.bilibili.com/video/BV1GJ411x7h7 --with-replies
+ *   node src/crawl.ts --video BV1GJ411x7h7 --hot-limit 50 --recent-limit 30
  *   node src/crawl.ts --video BV1GJ411x7h7 --db data/test.db
  *
  * 【参数说明】
  *   --video        必填。BV 号 / 完整视频链接 / b23.tv 短链
- *   --pages        最多抓多少页主评论，默认 3（每页 20 条）
- *   --mode         排序方式：3 = 热度排序（默认，高赞评论里信息更密）/ 2 = 时间排序
+ *   --hot-limit    按热度选多少条一级评论，默认 50
+ *   --recent-limit 按时间选多少条最新一级评论，默认 30
  *   --with-replies 是否顺带把每条一级评论下的楼中楼也抓下来（价格方案常藏在问答里）
- *   --sub-pages    每条一级评论最多抓多少页楼中楼，默认 5
+ *   --sub-limit    每条一级评论最多保留多少条楼中楼，默认 20
  *   --db           数据库文件路径，默认 data/bilibili.db
  *   -h, --help     打印帮助
  */
@@ -29,6 +29,8 @@ import { finishCrawlLog, insertComments, openDb, startCrawlLog, upsertVideo } fr
 import { createBiliClient } from './bilibili/client.ts';
 // B站业务接口：解析 BV 号、取视频信息、取评论
 import { COMMENT_MODE, fetchCommentPage, fetchSubComments, fetchVideoInfo, parseBvid } from './bilibili/api.ts';
+import { selectRootComments } from './comment-selection.ts';
+import type { CommentRow } from './types.ts';
 
 /** 命令行帮助文本 */
 const HELP_TEXT = `
@@ -39,16 +41,16 @@ const HELP_TEXT = `
 
 选项：
   --video        必填，BV 号 / 视频链接 / b23.tv 短链
-  --pages        最多抓多少页主评论（默认 3，每页 20 条）
-  --mode         3 = 热度排序（默认），2 = 时间排序
+  --hot-limit    按热度选取的一级评论数（默认 50）
+  --recent-limit 按时间选取的最新一级评论数（默认 30）
   --with-replies 顺带抓取楼中楼回复
-  --sub-pages    每条一级评论最多抓多少页楼中楼（默认 5，仅 --with-replies 时生效）
+  --sub-limit    每条一级评论最多保留多少条楼中楼（默认 20，仅 --with-replies 时生效）
   --db           数据库文件路径（默认 data/bilibili.db）
   -h, --help     显示本帮助
 
 示例：
-  node src/crawl.ts --video BV1GJ411x7h7 --pages 3
-  node src/crawl.ts --video BV1GJ411x7h7 --pages 2 --with-replies
+  node src/crawl.ts --video BV1GJ411x7h7
+  node src/crawl.ts --video BV1GJ411x7h7 --with-replies --sub-limit 20
 `;
 
 /**
@@ -85,6 +87,53 @@ function truncate(text: string, maxLength: number): string {
   return single.length > maxLength ? `${single.slice(0, maxLength)}…` : single;
 }
 
+interface RootStreamResult {
+  rows: CommentRow[];
+  pagesFetched: number;
+  endedEarly: boolean;
+  totalCount: number;
+}
+
+/** 按指定排序模式分页抓取一级评论，直到拿够目标条数或接口到底。 */
+async function fetchRootStream(
+  client: ReturnType<typeof createBiliClient>,
+  args: { bvid: string; oid: string; mode: number; limit: number; pageSize: number },
+): Promise<RootStreamResult> {
+  const rows: CommentRow[] = [];
+  const seen = new Set<string>();
+  let cursorNext = 0;
+  let pagesFetched = 0;
+  let endedEarly = false;
+  let totalCount = 0;
+
+  while (rows.length < args.limit) {
+    const page = await fetchCommentPage(client, {
+      bvid: args.bvid,
+      oid: args.oid,
+      mode: args.mode,
+      next: cursorNext,
+      ps: args.pageSize,
+    });
+    pagesFetched += 1;
+    totalCount = page.cursor.all_count ?? totalCount;
+
+    for (const row of page.rows) {
+      if (seen.has(row.rpid)) continue;
+      seen.add(row.rpid);
+      rows.push(row);
+      if (rows.length >= args.limit) break;
+    }
+
+    if (page.cursor.is_end || page.rows.length === 0) {
+      endedEarly = totalCount > rows.length;
+      break;
+    }
+    cursorNext = page.cursor.next;
+  }
+
+  return { rows, pagesFetched, endedEarly, totalCount };
+}
+
 /**
  * 主流程。写成独立函数是为了能用 try/finally 保证数据库被正确关闭。
  */
@@ -93,10 +142,10 @@ async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       video: { type: 'string' }, // 视频标识
-      pages: { type: 'string' }, // 抓取页数
-      mode: { type: 'string' }, // 排序方式
+      'hot-limit': { type: 'string' }, // 热门一级评论条数
+      'recent-limit': { type: 'string' }, // 最新一级评论条数
       'with-replies': { type: 'boolean', default: false }, // 是否抓楼中楼
-      'sub-pages': { type: 'string' }, // 楼中楼页数上限
+      'sub-limit': { type: 'string' }, // 楼中楼条数上限
       db: { type: 'string' }, // 数据库路径
       help: { type: 'boolean', short: 'h', default: false }, // 帮助开关
     },
@@ -111,10 +160,10 @@ async function main(): Promise<void> {
   }
 
   // ——— 第 2 步：把参数整理成最终值（命令行 > 配置文件 > 代码默认值） ———
-  const maxPages = toInt(values.pages, 3); // 最多抓 3 页主评论
-  const orderMode = toInt(values.mode, COMMENT_MODE.hot); // 默认热度排序
+  const hotLimit = Math.max(0, toInt(values['hot-limit'], 50));
+  const recentLimit = Math.max(0, toInt(values['recent-limit'], 30));
   const withReplies = values['with-replies']; // 是否抓楼中楼
-  const subPages = toInt(values['sub-pages'], 5); // 楼中楼页数上限
+  const subLimit = Math.max(1, toInt(values['sub-limit'], 20)); // 每个对话最多保留 20 条楼中楼
   const config = loadConfig(); // 读 .env + 默认值
   // 数据库路径：命令行 --db 优先，否则用配置里的默认值
   const dbFile = values.db ? path.resolve(PROJECT_ROOT, values.db) : config.dbFile;
@@ -124,7 +173,8 @@ async function main(): Promise<void> {
   console.log('='.repeat(72));
   console.log(`目标视频：${bvid}`);
   console.log(`数据库：  ${dbFile}`);
-  console.log(`排序方式：${orderMode === COMMENT_MODE.hot ? '热度' : '时间'}｜最多 ${maxPages} 页｜楼中楼：${withReplies ? `开启（每条最多 ${subPages} 页）` : '关闭'}`);
+  console.log(`一级评论：热门 ${hotLimit} 条 + 最新 ${recentLimit} 条（按 rpid 去重）`);
+  console.log(`楼中楼：${withReplies ? `开启（每条一级评论最多保留前 ${subLimit} 条）` : '关闭'}`);
   console.log('='.repeat(72));
 
   // ——— 第 4 步：打开数据库 + 创建 B站客户端 ———
@@ -167,97 +217,83 @@ async function main(): Promise<void> {
 
   console.log('\n[2/2] 开始抓取评论…');
 
-  // ——— 第 6 步：循环抓取评论页 ———
+  // ——— 第 6 步：分别抓热门与最新评论，合并后再展开楼中楼 ———
   // try/catch/finally 保证无论成功还是失败，都会写日志、关数据库
   try {
-    // 翻页游标：第一页固定传 0，之后用上一页返回的 cursor.next
-    let cursorNext = 0;
+    console.log(`  抓取热门评论候选（目标 ${hotLimit} 条）…`);
+    const hotResult = await fetchRootStream(client, {
+      bvid,
+      oid: String(videoAid),
+      mode: COMMENT_MODE.hot,
+      limit: hotLimit,
+      pageSize: config.pageSize,
+    });
+    pageCount += hotResult.pagesFetched;
+    console.log(`    热门流：${hotResult.pagesFetched} 页，取得 ${hotResult.rows.length} 条`);
 
-    // 一直抓到「达到页数上限」或「评论区到底」
-    while (pageCount < maxPages) {
-      // 抓一页主评论
-      const page = await fetchCommentPage(client, {
-        bvid, // 视频 BV 号
-        oid: String(videoAid), // 评论区归属 id（视频就是 aid）
-        mode: orderMode, // 排序方式
-        next: cursorNext, // 翻页游标（只靠它翻页）
-        ps: config.pageSize, // 每页条数
-      });
-      // 页数 +1
-      pageCount += 1;
+    console.log(`  抓取最新评论候选（目标 ${recentLimit} 条）…`);
+    const recentResult = await fetchRootStream(client, {
+      bvid,
+      oid: String(videoAid),
+      mode: COMMENT_MODE.time,
+      limit: recentLimit,
+      pageSize: config.pageSize,
+    });
+    pageCount += recentResult.pagesFetched;
+    console.log(`    最新流：${recentResult.pagesFetched} 页，取得 ${recentResult.rows.length} 条`);
 
-      // 本页要写库的全部评论：先放一级评论
-      const collected = [...page.rows];
+    const selection = selectRootComments(hotResult.rows, recentResult.rows, hotLimit, recentLimit);
+    const collected = [...selection.rows];
+    console.log(
+      `  一级评论合并：热门 ${selection.hotRows.length} + 最新 ${selection.recentRows.length}`
+      + ` - 重叠 ${selection.overlapCount} = 去重后 ${selection.rows.length} 条`,
+    );
 
-      // 可选：顺带展开楼中楼（价格方案经常藏在「怎么买的？」「买会员+抢券」这种对话里）
-      if (withReplies) {
-        for (const row of page.rows) {
-          // 没有回复的评论直接跳过，省掉一次请求（这一步能大幅减少请求量）
-          if (row.subCount <= 0) continue;
-          // 抓这条一级评论下的楼中楼
-          const subResult = await fetchSubComments(client, {
-            bvid,
-            oid: String(videoAid),
-            root: row.rpid, // 要展开的一级评论 id
-            ps: config.pageSize,
-            maxPages: subPages, // 页数上限，防止极端评论刷爆请求量
-          });
-          // 完整性写回一级评论，供后续对话组装和 LLM 判断证据是否缺上下文。
-          row.subFetchedCount = subResult.rows.length;
-          row.subContextComplete = subResult.isComplete;
-          // 追加到本批数据里
-          collected.push(...subResult.rows);
-          if (subResult.truncatedByLimit) {
-            console.warn(
-              `  ⚠️  一级评论 ${row.rpid} 的楼中楼达到 ${subPages} 页上限：已抓 ${subResult.rows.length}`
-              + `${subResult.totalCount === null ? ' 条，总数未知' : `/${subResult.totalCount} 条`}，上下文已标记为不完整。`,
-            );
-          }
-        }
+    // 可选：每条已去重的一级评论最多展开前 N 条楼中楼。
+    if (withReplies) {
+      for (const [index, row] of selection.rows.entries()) {
+        if (row.subCount <= 0) continue;
+        const subResult = await fetchSubComments(client, {
+          bvid,
+          oid: String(videoAid),
+          root: row.rpid,
+          ps: config.pageSize,
+          maxReplies: subLimit,
+        });
+        row.subFetchedCount = subResult.rows.length;
+        row.subContextComplete = subResult.isComplete;
+        collected.push(...subResult.rows);
+        console.log(
+          `    [${index + 1}/${selection.rows.length}] 楼中楼 ${row.rpid}：`
+          + `${subResult.rows.length}${subResult.totalCount === null ? '' : `/${subResult.totalCount}`} 条`
+          + `${subResult.truncatedByLimit ? '（已截断）' : ''}`,
+        );
       }
+    }
 
-      // 整页（含楼中楼）一次性写库。UPSERT 保证重复抓取不会产生重复行
-      const saved = insertComments(db, collected);
-      savedCount += saved;
+    savedCount = insertComments(db, collected);
+    console.log(`  本次处理：一级评论 ${selection.rows.length} 条，含楼中楼共 ${savedCount} 条`);
 
-      // 打印本页进度
-      console.log(
-        `  第 ${pageCount} 页：一级评论 ${page.rows.length} 条，本页处理 ${saved} 条（累计 ${savedCount} 条）`,
-      );
-
-      // 这里只观察到了“成功响应但分页提前结束”，没有拿到 -101，不能直接断言登录失效。
-      const totalCount = page.cursor.all_count ?? 0; // 评论区总条数
-      if (pageCount === 1 && page.cursor.is_end && totalCount > page.rows.length) {
-        const lines = [
-          '',
-          '⚠️  检测到「只能抓到很少的评论」：',
-          `    B站显示该视频共有 ${totalCount} 条评论，但本次只返回了 ${page.rows.length} 条就结束了。`,
-        ];
-        if (config.sessdata) {
-          lines.push(
-            '    已配置 BILI_SESSDATA，但这次响应本身没有返回 -101，不能仅凭条数断言登录失效。',
-            '    可能原因包括登录态未被认可、视频评论限制、接口策略或临时风控。',
-            '    请运行 `npm run check:auth` 独立核实登录态，再根据结果处理。',
-          );
-        } else {
-          lines.push(
-            '    原因：未登录状态下 B站只放行少量评论（浏览器里也会提示“登录后查看更多评论”）。',
-            '    解决：在项目根目录创建 .env 文件，填入 BILI_SESSDATA=你的SESSDATA 后重新运行。',
-            '    获取方法见 .env.example 的说明；配置完可用 `npm run check:auth` 验证是否生效。',
-          );
-        }
-        lines.push('');
-        console.warn(lines.join('\n'));
+    // 两条流都提前结束时才提示分页受限；这里只陈述成功响应的观察结果，不伪造 -101。
+    if (hotResult.endedEarly && recentResult.endedEarly) {
+      const observedTotal = Math.max(hotResult.totalCount, recentResult.totalCount);
+      const lines = [
+        '',
+        '⚠️  热门流和最新流都在达到目标条数前结束：',
+        `    B站显示约有 ${observedTotal} 条评论，本次热门取得 ${hotResult.rows.length} 条、最新取得 ${recentResult.rows.length} 条。`,
+      ];
+      if (config.sessdata) {
+        lines.push(
+          '    这次响应本身没有返回 -101，不能仅凭条数断言登录失效。',
+          '    请运行 `npm run check:auth` 独立核实登录态，也可能是视频限制、接口策略或临时风控。',
+        );
+      } else {
+        lines.push(
+          '    未配置 SESSDATA 时 B站通常只放行少量评论。请配置后运行 `npm run check:auth` 验证。',
+        );
       }
-
-      // 已经到底，或这一页没有数据，就结束循环
-      if (page.cursor.is_end || page.rows.length === 0) {
-        console.log('  已到达评论区末尾');
-        break;
-      }
-
-      // 更新游标，准备抓下一页（只用 cursor.next 这一个字段）
-      cursorNext = page.cursor.next;
+      lines.push('');
+      console.warn(lines.join('\n'));
     }
 
     // 标记本次抓取成功
@@ -270,7 +306,7 @@ async function main(): Promise<void> {
       .get(bvid) as { n: number } | undefined;
 
     console.log(`\n${'='.repeat(72)}`);
-    console.log(`抓取完成：共 ${pageCount} 页，数据库中该视频现有评论 ${total?.n ?? 0} 条`);
+    console.log(`抓取完成：主评论接口共请求 ${pageCount} 页，数据库中该视频现有评论 ${total?.n ?? 0} 条`);
     console.log('='.repeat(72));
 
     // 打印点赞最高的 10 条一级评论，快速确认抓到的内容是否正常

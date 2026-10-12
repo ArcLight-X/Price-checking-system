@@ -80,21 +80,33 @@ test('楼中楼分页抓完时返回完整元数据', async () => {
   const result = await fetchSubComments(mockClient([
     { replies: [subReply('1'), subReply('2')], page: { count: 3, num: 1, size: 2 } },
     { replies: [subReply('3')], page: { count: 3, num: 2, size: 2 } },
-  ]), { bvid: 'BV-test', oid: '1', root: 'root-1', ps: 2, maxPages: 5 });
+  ]), { bvid: 'BV-test', oid: '1', root: 'root-1', ps: 2, maxReplies: 20 });
 
   assert.equal(result.rows.length, 3);
+  assert.deepEqual(result.rows.map((row) => row.rpid), ['1', '2', '3']);
   assert.equal(result.totalPages, 2);
   assert.equal(result.isComplete, true);
   assert.equal(result.truncatedByLimit, false);
 });
 
-test('楼中楼达到页数上限时明确返回截断', async () => {
+test('楼中楼达到条数上限时明确返回截断', async () => {
   const result = await fetchSubComments(mockClient([
-    { replies: [subReply('1'), subReply('2')], page: { count: 5, num: 1, size: 2 } },
-  ]), { bvid: 'BV-test', oid: '1', root: 'root-1', ps: 2, maxPages: 1 });
+    { replies: [subReply('1'), subReply('2'), subReply('3')], page: { count: 5, num: 1, size: 3 } },
+  ]), { bvid: 'BV-test', oid: '1', root: 'root-1', ps: 3, maxReplies: 2 });
 
   assert.equal(result.rows.length, 2);
-  assert.equal(result.totalPages, 3);
+  assert.deepEqual(result.rows.map((row) => row.rpid), ['1', '2']);
+  assert.equal(result.totalPages, 2);
   assert.equal(result.isComplete, false);
   assert.equal(result.truncatedByLimit, true);
+});
+
+test('楼中楼跨页重复 rpid 不会虚增完整性计数', async () => {
+  const result = await fetchSubComments(mockClient([
+    { replies: [subReply('1'), subReply('2')], page: { count: 3, num: 1, size: 2 } },
+    { replies: [subReply('2'), subReply('3')], page: { count: 3, num: 2, size: 2 } },
+  ]), { bvid: 'BV-test', oid: '1', root: 'root-1', ps: 2, maxReplies: 20 });
+
+  assert.deepEqual(result.rows.map((row) => row.rpid), ['1', '2', '3']);
+  assert.equal(result.isComplete, true);
 });

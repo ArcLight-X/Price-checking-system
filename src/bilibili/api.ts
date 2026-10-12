@@ -167,8 +167,8 @@ export interface FetchSubCommentsArgs {
   root: string;
   /** 每页条数 */
   ps: number;
-  /** 最多抓多少页楼中楼（防止某个神评论下有几万条回复把程序卡死） */
-  maxPages?: number;
+  /** 最多保留多少条楼中楼；默认 20，超过后直接截断 */
+  maxReplies?: number;
 }
 
 /** 楼中楼抓取结果。调用方必须保留完整性信息，不能把截断上下文当成完整对话。 */
@@ -191,17 +191,20 @@ export async function fetchSubComments(
 ): Promise<FetchSubCommentsResult> {
   // 收集结果的数组
   const rows: CommentRow[] = [];
+  // 接口数据变化时相邻分页可能出现重复 rpid；在 API 层去重，避免完整性计数虚高。
+  const seenRpids = new Set<string>();
   // 楼中楼也分页，从第 1 页开始
   let pageNumber = 1;
-  // 默认最多抓 5 页（每页 20 条，即最多 100 条回复）
-  const maxPages = args.maxPages ?? 5;
+  // 默认只保留前 20 条：通常高价值追问集中在前排，同时控制 LLM 上下文长度。
+  const maxReplies = Math.max(1, args.maxReplies ?? 20);
   let pagesFetched = 0;
   let totalCount: number | null = null;
   let totalPages: number | null = null;
   let reachedEnd = false;
 
-  // 一直取到最后一页为止
-  while (pageNumber <= maxPages) {
+  // 一直取到最后一页，或达到回复条数上限。
+  while (rows.length < maxReplies) {
+    const remaining = maxReplies - rows.length;
     // 请求楼中楼接口
     const data = await client.request<BiliSubCommentData>(
       COMMENT_SUB_API,
@@ -212,9 +215,13 @@ export async function fetchSubComments(
     // 取出这一页的回复列表
     const replies = data.replies ?? [];
     pagesFetched += 1;
-    // 转换后收集起来（isRoot 传 false，表示这是楼中楼）
+    // 转换后收集起来（isRoot 传 false，表示这是楼中楼）。达到条数上限立即停止。
     for (const reply of replies) {
-      rows.push(toCommentRow(reply, args.bvid, args.oid, false));
+      const row = toCommentRow(reply, args.bvid, args.oid, false);
+      if (seenRpids.has(row.rpid)) continue;
+      seenRpids.add(row.rpid);
+      rows.push(row);
+      if (rows.length >= maxReplies) break;
     }
 
     // 该接口的 page.count 是回复总条数，不是总页数；总页数要除以 page.size 向上取整。
@@ -232,7 +239,8 @@ export async function fetchSubComments(
     pageNumber += 1;
   }
 
-  // 接口没返回分页信息时，只能通过空页判断到底；不能因为“正好抓到上限”就猜完整。
+  // 接口没返回分页信息时，只能通过空页或不足一页判断到底；
+  // 不能因为“正好抓到 20 条”就猜完整。
   const isComplete = reachedEnd || (totalCount !== null && rows.length >= totalCount);
   return {
     rows,
@@ -240,7 +248,7 @@ export async function fetchSubComments(
     totalCount,
     totalPages,
     isComplete,
-    truncatedByLimit: !isComplete && pagesFetched >= maxPages,
+    truncatedByLimit: !isComplete && rows.length >= maxReplies,
   };
 }
 
