@@ -12,11 +12,16 @@ import { createDeepSeekClient, parseModelJson } from './deepseek.ts';
 import { insertComments, openDb, upsertVideo } from './db.ts';
 import { buildPriceExtractionPrompt } from './extractor/prompt.ts';
 import { validatePriceExtraction } from './extractor/validator.ts';
-import { selectResearchConversations } from './research-selection.ts';
+import {
+  MIN_RESEARCH_VIDEO_PLAY,
+  hasEnoughPlays,
+  selectResearchConversations,
+} from './research-selection.ts';
 import type { PriceClaim } from './extractor/types.ts';
 
 const HELP_TEXT = `
 输入商品名称，自动搜索 B站视频、抓取评论并使用 DeepSeek 分析价格
+只处理播放量不少于 ${MIN_RESEARCH_VIDEO_PLAY} 的视频。
 
 用法：
   node src/research.ts --product <商品名称> [选项]
@@ -80,13 +85,14 @@ async function searchResearchVideos(
   const keywords = [`${product} 价格`, `${product} 好价`, `${product} 入手价`];
   const rows: Awaited<ReturnType<typeof fetchVideoSearch>> = [];
   for (const keyword of keywords) {
-    rows.push(...await fetchVideoSearch(client, keyword, limit));
+    rows.push(...await fetchVideoSearch(client, keyword, 20));
   }
   rows.push(...loadStoredVideos(db));
   const unique = new Map(rows.map((row) => [row.bvid, row]));
   const normalizedProduct = normalizeSearchText(product);
   const targetParts = productParts(product).map(normalizeSearchText).filter((part) => part.length >= 2);
   return [...unique.values()]
+    .filter(hasEnoughPlays)
     .map((row) => {
       const title = normalizeSearchText(row.title);
       const productMatch = title.includes(normalizedProduct);
@@ -223,9 +229,9 @@ async function main(): Promise<void> {
   let analyzedCount = 0;
 
   try {
-    console.log(`搜索商品相关视频：${product}（价格 / 好价 / 入手价）`);
+    console.log(`搜索商品相关视频：${product}（价格 / 好价 / 入手价，播放量 >= ${MIN_RESEARCH_VIDEO_PLAY}）`);
     const videos = await searchResearchVideos(biliClient, db, product, videoLimit);
-    if (videos.length === 0) throw new Error(`B站没有返回与“${product}”相关的视频`);
+    if (videos.length === 0) throw new Error(`没有找到播放量达到 ${MIN_RESEARCH_VIDEO_PLAY} 的“${product}”相关视频`);
 
     console.table(videos.map((video, index) => ({
       序号: index + 1,

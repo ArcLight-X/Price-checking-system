@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { CommentConversation } from '../src/conversation.ts';
-import { selectResearchConversations } from '../src/research-selection.ts';
+import {
+  hasEnoughPlays,
+  selectResearchConversations,
+} from '../src/research-selection.ts';
 
 function conversation(label: string, content: string, likeCount = 0): CommentConversation {
   return {
@@ -25,6 +28,12 @@ function conversation(label: string, content: string, likeCount = 0): CommentCon
     text: content,
   };
 }
+
+test('商品研究只保留播放量至少 5000 的视频', () => {
+  assert.equal(hasEnoughPlays({ play: 4999 }), false);
+  assert.equal(hasEnoughPlays({ play: 5000 }), true);
+  assert.equal(hasEnoughPlays({ play: 5001 }), true);
+});
 
 test('商品研究只保留价格候选并优先完整命中目标型号', () => {
   const selected = selectResearchConversations([

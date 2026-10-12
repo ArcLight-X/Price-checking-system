@@ -118,7 +118,7 @@ npm run analyze -- --video BV1GJ411x7h7 --limit 10
 npm run research -- --product "RTX 5070 Ti"
 ```
 
-默认处理 3 个视频，每个视频最多分析 10 个包含价格信号的评论对话，结果写入 `data/RTX-5070-Ti-research.jsonl`。
+只会选择播放量不少于 5000 的相关视频。默认处理 3 个视频，每个视频最多分析 10 个包含价格信号的评论对话，结果写入 `data/RTX-5070-Ti-research.jsonl`。
 命令结束时会直接在终端打印价格、渠道、优惠条件和证据摘要；JSONL 保留完整结构化结果。
 
 ### 4）用 npm 脚本跑（等价写法）

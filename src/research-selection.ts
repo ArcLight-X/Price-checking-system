@@ -1,5 +1,11 @@
 import type { CommentConversation } from './conversation.ts';
 
+export const MIN_RESEARCH_VIDEO_PLAY = 5000;
+
+export function hasEnoughPlays(video: { play: number }): boolean {
+  return video.play >= MIN_RESEARCH_VIDEO_PLAY;
+}
+
 const EXPLICIT_AMOUNT_PATTERNS = [
   /[¥￥]\s*\d{2,7}(?:\.\d{1,2})?/i,
   /\d{2,7}(?:\.\d{1,2})?\s*(?:元|块|rmb)/i,
