@@ -1,8 +1,8 @@
 {
-  "name": "ex_mall",
+  "name": "comment-price-checker",
   "version": "0.1.0",
   "private": true,
-  "description": "从 B站视频评论中搜索、提取并校验商品价格与购买方案",
+  "description": "评论区查价系统：从 B站视频评论中搜索、提取并校验商品价格与购买方案",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -11,10 +11,9 @@
     "crawl": "node --disable-warning=ExperimentalWarning src/crawl.ts",
     "query": "node --disable-warning=ExperimentalWarning src/query.ts",
     "analyze": "node --disable-warning=ExperimentalWarning src/analyze.ts",
-    "research": "node --disable-warning=ExperimentalWarning src/research.ts",
+    "research": "chcp 65001 >NUL && node --disable-warning=ExperimentalWarning src/research.ts",
     "db:info": "node --disable-warning=ExperimentalWarning scripts/inspect-db.mjs",
     "check:auth": "node --disable-warning=ExperimentalWarning scripts/check-auth.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test tests/ark.test.ts tests/bilibili-search.test.ts tests/comment-selection.test.ts tests/conversation.test.ts tests/extraction-validator.test.ts tests/research-selection.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

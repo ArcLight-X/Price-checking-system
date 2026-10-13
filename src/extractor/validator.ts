@@ -1,4 +1,5 @@
 import type { CommentConversation } from '../conversation.ts';
+import { matchesRequestedProduct } from '../research-selection.ts';
 import {
   EXTRACTION_SCHEMA_VERSION,
   type ClaimKind,
@@ -58,6 +59,7 @@ function requireStringArray(value: unknown, path: string, issues: ValidationIssu
 export function validatePriceExtraction(
   input: unknown,
   conversation: CommentConversation,
+  options: { targetProduct?: string } = {},
 ): ExtractionValidationResult {
   const issues: ValidationIssue[] = [];
   if (!isRecord(input)) {
@@ -107,6 +109,21 @@ export function validatePriceExtraction(
       for (const field of ['brand', 'name', 'model', 'variant'] as const) {
         if (!isNullableString(product[field])) {
           addIssue(issues, 'error', `${path}.product.${field}`, 'invalid_nullable_string', '必须是字符串或 null');
+        }
+      }
+      if (options.targetProduct) {
+        const extractedProduct = ['brand', 'name', 'model', 'variant']
+          .map((field) => product[field])
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .join(' ');
+        if (!matchesRequestedProduct(extractedProduct, options.targetProduct)) {
+          addIssue(
+            issues,
+            'error',
+            `${path}.product`,
+            'product_mismatch',
+            `提取商品“${extractedProduct || '未识别'}”与目标商品“${options.targetProduct}”不一致`,
+          );
         }
       }
       for (const field of ['pagePrice', 'reportedPaidPrice', 'extraCostTotal', 'totalCost'] as const) {

@@ -30,5 +30,5 @@
     "types": ["node"]
   },
   // 只检查 src 和 scripts 目录下的 TS 文件
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }

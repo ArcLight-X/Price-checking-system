@@ -15,7 +15,7 @@ const ACCESSORY_WORDS = [
   '数据线', '充电线', '支架', '镜头膜', '挂绳', '配件',
 ];
 
-const VARIANT_SUFFIXES = ['promax', 'pro', 'plus', 'air', 'mini', 'ultra', 'max'];
+const VARIANT_SUFFIXES = ['promax', 'pm', 'pro', 'plus', 'air', 'mini', 'ultra', 'max'];
 
 /** 排除配件、其他版本和后继型号，只保留用户输入的目标商品。 */
 export function matchesRequestedProduct(title: string, product: string): boolean {
@@ -28,7 +28,11 @@ export function matchesRequestedProduct(title: string, product: string): boolean
   const titleIsAccessory = ACCESSORY_WORDS.some((word) => normalizedTitle.includes(word));
   if (!productIsAccessory && titleIsAccessory) return false;
 
-  const suffix = normalizedTitle.slice(position + normalizedProduct.length);
+  let suffix = normalizedTitle.slice(position + normalizedProduct.length);
+  // 模型偶尔会重复目标商品或型号，例如“iPhone 17 iPhone 17 Pro Max”“iPhone 17 17pm”。
+  if (suffix.startsWith(normalizedProduct)) suffix = suffix.slice(normalizedProduct.length);
+  const trailingModel = normalizedProduct.match(/\d+[a-z]*$/)?.[0];
+  if (trailingModel && suffix.startsWith(trailingModel)) suffix = suffix.slice(trailingModel.length);
   if (/^[2-9](?!\d|gb|tb|寸|英寸)/.test(suffix)) return false;
   return !VARIANT_SUFFIXES.some((variant) => suffix.startsWith(variant));
 }

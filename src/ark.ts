@@ -45,6 +45,26 @@ export interface ArkPrompt {
   user: string;
 }
 
+export class ArkApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(
+    message: string,
+    status: number,
+    code: string | null,
+  ) {
+    super(message);
+    this.name = 'ArkApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function isFatalArkApiError(error: unknown): error is ArkApiError {
+  return error instanceof ArkApiError && (error.status === 401 || error.status === 403);
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -62,7 +82,7 @@ export function createArkClient(options: ArkClientOptions): {
   extractJson(prompt: ArkPrompt): Promise<ArkResult>;
 } {
   const apiKey = options.apiKey.trim();
-  const model = options.model?.trim() || 'doubao-seed-2-0-mini-260428';
+  const model = options.model?.trim() || 'doubao-seed-2-0-lite-260428';
   const baseUrl = trimTrailingSlash(options.baseUrl?.trim() || 'https://ark.cn-beijing.volces.com/api/v3');
   const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -90,7 +110,18 @@ export function createArkClient(options: ArkClientOptions): {
 
         const responseText = await response.text();
         if (!response.ok) {
-          throw new Error(`火山方舟 API 请求失败（HTTP ${response.status}）：${responseText.slice(0, 500)}`);
+          let code: string | null = null;
+          try {
+            const errorData = JSON.parse(responseText) as { error?: { code?: unknown } };
+            if (typeof errorData.error?.code === 'string') code = errorData.error.code;
+          } catch {
+            // 非 JSON 错误响应仍保留 HTTP 状态和原始正文摘要。
+          }
+          throw new ArkApiError(
+            `火山方舟 API 请求失败（HTTP ${response.status}${code ? `，${code}` : ''}）：${responseText.slice(0, 500)}`,
+            response.status,
+            code,
+          );
         }
 
         let data: ArkResponse;

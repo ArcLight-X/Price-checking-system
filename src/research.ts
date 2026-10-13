@@ -8,7 +8,7 @@ import { createBiliClient } from './bilibili/client.ts';
 import { crawlVideoComments } from './comment-crawler.ts';
 import { PROJECT_ROOT, loadConfig } from './config.ts';
 import { assembleConversations, type CommentConversation, type ConversationSourceRow } from './conversation.ts';
-import { createArkClient, parseModelJson } from './ark.ts';
+import { createArkClient, isFatalArkApiError, parseModelJson } from './ark.ts';
 import { insertComments, openDb, upsertVideo } from './db.ts';
 import { buildPriceExtractionPrompt } from './extractor/prompt.ts';
 import { validatePriceExtraction } from './extractor/validator.ts';
@@ -292,7 +292,9 @@ async function main(): Promise<void> {
               targetProduct: product,
               videoTitle: crawled.video.title,
             }));
-            const validation = validatePriceExtraction(parseModelJson(response.content), conversation);
+            const validation = validatePriceExtraction(parseModelJson(response.content), conversation, {
+              targetProduct: product,
+            });
             analyzedCount += 1;
             outputLines.push(JSON.stringify({
               product,
@@ -322,6 +324,7 @@ async function main(): Promise<void> {
               });
             }
           } catch (error) {
+            if (isFatalArkApiError(error)) throw error;
             failedCount += 1;
             outputLines.push(JSON.stringify({
               product,
@@ -336,6 +339,7 @@ async function main(): Promise<void> {
           }
         }
       } catch (error) {
+        if (isFatalArkApiError(error)) throw error;
         const message = error instanceof Error ? error.message : String(error);
         console.error(`  视频处理失败：${message}`);
         outputLines.push(JSON.stringify({

@@ -1,4 +1,4 @@
-# ex_mall · 评论区价格信息采集系统
+# 评论区查价系统
 
 > **当前阶段：已完成双流评论采集、可审计对话组装，以及价格抽取的 LLM 契约与程序验证器。**
 >
@@ -33,7 +33,7 @@ node -v          # 应输出 v24.x 或更高
 ## 三、目录结构
 
 ```
-ex_mall/
+comment-price-checker/
 ├─ package.json          npm 脚本与（可选的）开发依赖
 ├─ tsconfig.json         TS 配置：只做类型检查，不产出 JS
 ├─ .env.example          环境变量模板（复制成 .env 后生效）
@@ -42,7 +42,6 @@ ex_mall/
 ├─ .vscode/settings.json 编辑器统一按 UTF-8 打开本项目文件
 ├─ README.md             本文件
 ├─ evals/                价格抽取人工评测种子（JSONL）
-├─ tests/                对话、评论选择和抽取验证器测试
 ├─ data/                 运行时生成：bilibili.db + 导出的 jsonl（已 git 忽略）
 ├─ scripts/
 │  └─ inspect-db.mjs     只读脚本：查看 .db 文件里到底存了什么（npx 或 node 直接跑）
@@ -101,7 +100,7 @@ node src/query.ts logs                                        # 抓取流水日�
 
 ```text
 ARK_API_KEY=你的火山方舟API密钥
-ARK_MODEL=doubao-seed-2-0-mini-260428
+ARK_MODEL=doubao-seed-2-0-lite-260428
 ```
 
 然后执行：
@@ -130,7 +129,6 @@ npm run analyze -- --video BV1GJ411x7h7 --limit 10
 npm run research -- --product "RTX 5070 Ti"
 npm run check:auth     # 自检 B站登录态（SESSDATA）是否有效
 npm run db:info        # 查看 .db 文件里到底存了什么
-npm test               # Node 原生测试：对话关系与上下文完整性
 npm run typecheck      # tsc --noEmit，验证类型正确
 ```
 

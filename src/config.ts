@@ -84,6 +84,6 @@ export function loadConfig(): AppConfig {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     arkApiKey: process.env['ARK_API_KEY'] ?? '',
     arkBaseUrl: process.env['ARK_BASE_URL'] ?? 'https://ark.cn-beijing.volces.com/api/v3',
-    arkModel: process.env['ARK_MODEL'] ?? 'doubao-seed-2-0-mini-260428',
+    arkModel: process.env['ARK_MODEL'] ?? 'doubao-seed-2-0-lite-260428',
   };
 }

@@ -10,3 +10,6 @@ data/
 # 日志
 *.log
 npm-debug.log*
+
+# 测试代码只保留在本地，不上传云端仓库
+tests/
