@@ -1,342 +1,91 @@
 # 评论区查价系统
 
-> 简历 / 项目介绍见 [docs/项目介绍.md](docs/项目介绍.md)。
+输入商品名称，搜索相关 B 站视频，采集评论与回复，利用豆包 Seed 提取价格、购买渠道及优惠条件，并输出 JSONL 和 CSV。也可以按 BV 号单独抓取、查看已保存的评论。
 
-> **当前阶段：已完成双流评论采集、可审计对话组装、豆包 Seed 价格抽取与程序校验，并支持候选预筛、3 路模型并发、成功结果缓存及 JSONL/CSV 输出。**
->
-> 安全边界：评论中的价格只能作为历史报告或未核验线索；未经外部核验，不能标为“当前可实现低价”。
+> 评论价格来自用户自述，仅供参考；不代表订单已核实或商品目前仍能以该价格购买。
 
----
+## 运行环境
 
-## 一、这个版本有什么特点
+- Node.js 24 或更高版本。项目直接运行 TypeScript 文件，无须构建；运行时仅使用 Node.js 内置模块。
+- 价格分析需要火山方舟 API Key；建议提供有效的 B 站 `SESSDATA`，否则可能只能读取少量评论。
+- 以下命令在**项目根目录**执行，示例使用 PowerShell。`data/` 中的数据库、分析结果和缓存均为运行时文件，不上传到 Git。
 
-| 特点 | 说明 |
-|---|---|
-| **零运行时依赖** | 只用 Node 内置模块：`fetch`（HTTP）、`node:sqlite`（数据库）、`node:crypto`（MD5 签名）、`node:util`（参数解析）。**不需要 `npm install` 就能跑** |
-| **零构建** | Node ≥ 24 原生支持直接执行 `.ts` 文件（类型擦除），`node src/crawl.ts` 即可，没有 webpack/tsc 构建步骤 |
-| **数据库零安装** | 用 SQLite 单文件，任何 SQL 工具都能直接打开 |
-| **反爬逻辑已收拢** | WBI 签名、频率限制、重试退避、Cookie 管理全部封装在 `src/bilibili/` 下 |
-
----
-
-## 二、环境要求
-
-- **Node.js ≥ 24.0.0**（本机实测 v24.14.0，`process.features.typescript === "strip"` 即为支持）
-- 可选：`npm install` 只为装 `typescript` + `@types/node`，用来获得编辑器类型提示和 `npm run typecheck`。**不装也不影响运行。**
-
-检查环境：
+## 配置
 
 ```powershell
-node -v          # 应输出 v24.x 或更高
+Copy-Item .env.example .env
 ```
 
----
-
-## 三、目录结构
-
-```
-comment-price-checker/
-├─ package.json          npm 脚本与（可选的）开发依赖
-├─ tsconfig.json         TS 配置：只做类型检查，不产出 JS
-├─ .env.example          环境变量模板（复制成 .env 后生效）
-├─ .gitignore            忽略 node_modules / data / .env
-├─ .editorconfig         跨编辑器统一编码（UTF-8）与缩进约定
-├─ .vscode/settings.json 编辑器统一按 UTF-8 打开本项目文件
-├─ README.md             本文件
-├─ evals/                价格抽取人工评测种子（JSONL）
-├─ data/                 运行时生成：bilibili.db、JSONL、CSV 和分析缓存（已 git 忽略）
-├─ scripts/
-│  └─ inspect-db.mjs     只读脚本：查看 .db 文件里到底存了什么（npx 或 node 直接跑）
-└─ src/
-   ├─ config.ts          配置集中管理，读 .env
-   ├─ types.ts           所有类型定义（数据库行 + B站接口结构）
-   ├─ db.ts              SQLite 建表 / 写入封装（videos、comments、crawl_logs）
-   ├─ comment-selection.ts 热门/最新两条候选流的排序、限额与去重
-   ├─ conversation.ts    组装稳定编号、回复关系和上下文完整性
-   ├─ crawl.ts           【入口 1】抓取：视频信息 + 评论区 → 数据库
-   ├─ query.ts           【入口 2】读取：查视频 / 查评论 / 正则搜索 / 导出
-   ├─ research.ts        【入口 3】按商品名称查询价格线索 → JSONL + CSV
-   ├─ extractor/         LLM Prompt、输出类型及证据/金额验证器
-   └─ bilibili/
-      ├─ wbi.ts          WBI 签名算法（B站反爬核心，单独隔离便于日后维护）
-      ├─ client.ts       HTTP 客户端：限速 + Cookie + 签名 + 重试 + 错误分类
-      └─ api.ts          业务接口：解析 BV 号 / 取视频信息 / 取主评论 / 取楼中楼
-```
-
----
-
-## 四、快速开始
-
-### 1）抓取（默认会创建 `data/bilibili.db`）
-
-```powershell
-# 默认抓点赞较高的 50 条一级评论 + 时间最新的 30 条，按评论 id 去重
-node src/crawl.ts --video BV1GJ411x7h7
-
-# 顺带展开每条一级评论下的前 20 条楼中楼（价格方案常藏在问答里）
-node src/crawl.ts --video BV1GJ411x7h7 --with-replies
-
-# 也可以调整三组条数
-node src/crawl.ts --video BV1GJ411x7h7 --hot-limit 60 --recent-limit 40 --with-replies --sub-limit 20
-
-# 也可以直接粘视频链接，或用 b23.tv 短链
-node src/crawl.ts --video "https://www.bilibili.com/video/BV1GJ411x7h7"
-```
-
-抓取完成后终端会自动打印「点赞最高的 10 条评论」，用来肉眼确认数据是否正常。
-
-### 2）读取
-
-```powershell
-node src/query.ts videos                                      # 库里有那些视频
-node src/query.ts comments --video BV1GJ411x7h7 --limit 20    # 看评论
-node src/query.ts conversations --video BV1GJ411x7h7 --limit 5 # 组装评论对话和完整性状态
-node src/query.ts comments --video BV1GJ411x7h7 --order time --root-only
-node src/query.ts search   --video BV1GJ411x7h7 --regex "\d{3,6}"   # 找数字（价格抽取第一步）
-node src/query.ts export   --video BV1GJ411x7h7 --out data/out.jsonl
-node src/query.ts logs                                        # 抓取流水日志
-```
-
-### 3）按商品名称查询价格线索（推荐）
-
-在项目根目录把 `.env.example` 复制为 `.env`，填写火山方舟 API 密钥；建议同时填写 `BILI_SESSDATA`，否则可能只能获取少量评论：
+编辑项目根目录的 `.env`：
 
 ```text
 ARK_API_KEY=你的火山方舟API密钥
-ARK_MODEL=doubao-seed-2-0-lite-260428
-BILI_SESSDATA=你的B站登录态Cookie值
+BILI_SESSDATA=你的B站SESSDATA值
 ```
 
-在项目根目录执行（PowerShell 中可直接运行 `node`，不依赖 `npm run research` 的 Windows `chcp` 脚本）：
+`ARK_MODEL` 可保留 `.env.example` 提供的默认配置。`SESSDATA` 只填 Cookie 的值，不要带 `SESSDATA=` 前缀；凭证和 API Key 不要提交到仓库。可运行 `npm run check:auth` 检查 B 站登录态。
+
+## 按商品名称查询价格（推荐）
 
 ```powershell
 node src/research.ts --product "RTX 5070 Ti"
-# 或使用 npm 脚本：npm run research -- --product "RTX 5070 Ti"
 ```
 
-**结果保存位置（相对于项目根目录）：**
+程序会搜索与商品匹配且播放量不少于 5000 的视频，采集热门、最新评论与回复，筛选价格候选并分析。默认处理 3 个视频、每个视频最多分析 10 个候选；模型分析默认最多 3 路并发，B 站请求仍受限速控制。命令完成后在终端显示购买方案摘要及结果文件路径。
 
-| 内容 | 默认文件 | 说明 |
-|---|---|---|
-| 筛选后的查价摘要 | `data/RTX-5070-Ti-research.csv` | 带 BOM 的 UTF-8 CSV，可用 Excel 打开；仅包含同时有明确金额和具体购买方案的记录；无符合记录时仍有表头 |
-| 完整分析记录 | `data/RTX-5070-Ti-research.jsonl` | 保存所有候选对话的结构化结果和校验信息，包含未进入 CSV 的记录 |
-| 评论数据库 | `data/bilibili.db` | 保存视频、评论和回复 |
-| 成功分析缓存 | `data/research-cache/` | 相同模型与输入下复用已通过校验的结果；`--no-cache` 可禁用读取缓存 |
+以示例商品为例，**默认保存在项目根目录的 `data/` 下**：
 
-例如，当前项目目录位于 `D:\Programme Projects\GO Project\ex_mall` 时，以上 CSV 的**实际路径**为 `D:\Programme Projects\GO Project\ex_mall\data\RTX-5070-Ti-research.csv`，不是 C 盘下载目录。命令结束也会在终端打印实际输出路径。
+| 文件 | 内容 |
+|---|---|
+| `data/RTX-5070-Ti-research.csv` | 只包含同时有明确金额与具体购买方案的摘要；UTF-8 BOM 编码，Excel 可打开；无符合记录时仍保留表头 |
+| `data/RTX-5070-Ti-research.jsonl` | 所有候选对话的完整结构化分析与校验结果，包括没有进入 CSV 的记录 |
+| `data/bilibili.db` | 视频、评论、回复及抓取记录 |
+| `data/research-cache/` | 相同模型和完整输入下已校验通过的分析缓存 |
 
-自定义 CSV 保存位置，或自定义完整 JSONL 的位置（省略 `--csv` 时 CSV 与 JSONL 同目录、同文件名，仅扩展名变为 `.csv`）：
+CSV **默认不会保存到下载文件夹**，而是保存在你克隆的项目目录下的 `data/RTX-5070-Ti-research.csv`；运行结束后终端也会打印实际绝对路径。
+
+自定义输出路径和分析范围：
 
 ```powershell
+# CSV 单独指定保存位置
 node src/research.ts --product "RTX 5070 Ti" --csv "C:\Users\你的用户名\Downloads\查价摘要.csv"
-node src/research.ts --product "RTX 5070 Ti" --out data/结果.jsonl  # 同时生成 data/结果.csv
+
+# 省略 --csv 时，CSV 与 JSONL 同名同目录，仅扩展名不同（此例为 data/结果.csv）
+node src/research.ts --product "RTX 5070 Ti" --out data/结果.jsonl
+
+# 每个视频最多分析 6 个候选、模型同时运行 3 个请求
+node src/research.ts --product "RTX 5070 Ti" --conversation-limit 6 --llm-concurrency 3
+
+# 强制重新分析，不读取此前的成功缓存（会产生新的模型调用）
+node src/research.ts --product "RTX 5070 Ti" --no-cache
 ```
 
-只会选择播放量不少于 5000 且商品与输入一致的视频。例如搜索 `MacBook Neo` 时排除 `MacBook Neo 2`；搜索 `iPhone 17` 时排除充电器、手机壳及 `Pro / Pro Max / Plus` 等版本。默认处理 3 个视频，每视频最多分析 10 个价格候选对话，模型并发默认为 3 路；可用 `--llm-concurrency 1` 改为串行，或用 `--conversation-limit 6` 减少每视频的候选数（可能遗漏线索）。B 站采集仍保持限速。**评论中的价格是历史报告或未核验线索，不代表当前可购买价格。**
+`--conversation-limit` 调低可能遗漏线索；增大并发可能触发模型服务的限流。查看全部参数：`node src/research.ts --help`。首次查询会发起 B 站请求和可能计费的模型调用；CSV 只展示满足摘要条件的记录，不保证一定有价格行。
 
-### 4）按已知 BV 号分析或查询已入库评论
+## 按 BV 号抓取、查看和分析
 
 ```powershell
-node src/analyze.ts --video BV1GJ411x7h7 --limit 10
+# 抓取视频评论并存入 data/bilibili.db；展开楼中楼可获取更多购买方案上下文
+node src/crawl.ts --video BV1GJ411x7h7 --with-replies
+
+# 查看已经入库的视频、评论与对话
+node src/query.ts videos
 node src/query.ts comments --video BV1GJ411x7h7 --limit 20
+node src/query.ts conversations --video BV1GJ411x7h7 --limit 5
+
+# 在已入库评论中按正则查找数字
+node src/query.ts search --video BV1GJ411x7h7 --regex "\d{3,6}"
+
+# 使用豆包 Seed 分析已入库的视频评论
+node src/analyze.ts --video BV1GJ411x7h7 --limit 10
 ```
 
-单视频分析默认输出 `data/<BV号>-price-analysis.jsonl`，**不生成上述商品查询摘要 CSV**；`query.ts` 读取已入库评论，也不会生成查价 CSV。
+单视频分析默认写入 `data/<BV号>-price-analysis.jsonl`，**不生成商品查询摘要 CSV**；`query.ts` 只读取已有数据。完整抓取、查询选项分别见 `node src/crawl.ts --help` 和 `node src/query.ts --help`。
 
-### 5）用 npm 脚本跑（等价写法）
+## 常见问题
 
-```powershell
-npm run crawl -- --video BV1GJ411x7h7 --with-replies
-npm run query -- comments --video BV1GJ411x7h7
-npm run analyze -- --video BV1GJ411x7h7 --limit 10
-npm run research -- --product "RTX 5070 Ti"
-npm run check:auth     # 自检 B站登录态（SESSDATA）是否有效
-npm run db:info        # 查看 .db 文件里到底存了什么
-npm run typecheck      # tsc --noEmit，验证类型正确
-```
+- **只拿到少量评论：** 检查 `.env` 中的 `BILI_SESSDATA` 是否有效，运行 `npm run check:auth`；登录态过期后需要重新获取。
+- **没有价格摘要：** CSV 有表头但没有价格行时，先看同名 JSONL 的完整分析记录；可适当提高候选数量，但评论不保证存在可用方案。
+- **接口限流或失败：** 保持合理的抓取间隔，稍后重试；请遵守平台规则，勿大规模抓取或公开分发原始评论。
 
----
-
-## 五、⚠️ 必须先配置 SESSDATA（实测结论）
-
-这是**最重要的一条**，本项目已实测验证：
-
-| 状态 | 结果 |
-|---|---|
-| **未登录**（无 SESSDATA） | 无论用哪个接口，主评论**只返回 3 条**就 `is_end=true`（即便 `all_count` 显示有 236939 条）。**换任何 Cookie 组合（buvid3 / buvid4 / b_nut / b_lsid / _uuid）都无法突破** |
-| **未登录**时抓楼中楼 | 可以正常翻页（实测 3 条一级评论扩展出 60 条楼中楼） |
-| **不带 WBI 签名**请求 | 直接 `code = -403`（证明本项目的签名实现是必需的且有效的） |
-
-**原因**：这是 B站的产品策略（浏览器里未登录时也会显示「登录后查看更多评论」），不是可以绕过的反爬措施。
-
-**解决办法**：
-
-1. 把 `.env.example` 复制为 `.env`
-2. 浏览器登录 B站 → `F12` → Application → Cookies → `https://www.bilibili.com` → 复制 `SESSDATA` 的值
-3. 填进 `.env`（**只复制值本身**，不要带 `SESSDATA=` 前缀，也不要加引号）：
-
-```
-BILI_SESSDATA=你复制到的值
-```
-
-4. 验证是否生效：
-
-```powershell
-npm run check:auth
-```
-
-### ⚠️ SESSDATA 会过期
-
-它是**有有效期的会话凭证**——长时间不登录、在别的设备退出登录、改过密码，都会让它失效。
-失效后接口返回 `-101 未登录`，抓取会退回到「只有 3 条」。
-
-用 `npm run check:auth` 判断：
-
-| 输出 | 含义 | 处理 |
-|---|---|---|
-| `🎉 结论：登录态有效` | 正常 | 无需处理 |
-| `❌ 结论：B站没有认可这个 SESSDATA` | 会话失效或复制不完整 | 重新登录 B站，重新复制一次 |
-
-程序在检测到「只抓到很少评论」时，会区分「没配 SESSDATA」和「配了但已失效」两种情况，给出对应提示。
-
----
-
-## 六、数据库表结构
-
-### `videos` —— 视频元信息（一个视频一行）
-
-| 列 | 说明 |
-|---|---|
-| `bvid` | BV 号，主键 |
-| `aid` | av 号，评论接口的 `oid` 参数就是它 |
-| `title` / `up_name` / `up_mid` | 标题 / UP主昵称 / UP主 uid |
-| `pubdate` / `duration` | 发布时间 / 时长（秒） |
-| `view_count` / `danmaku_cnt` / `reply_count` | 播放 / 弹幕 / 评论总数 |
-| `like_count` / `coin_count` / `fav_count` | 点赞 / 投币 / 收藏 |
-| `description` / `url` | 简介 / 视频地址 |
-| `crawled_at` | 本行最后写入时间 |
-
-### `comments` —— 评论（一级评论 + 楼中楼共用一张表）
-
-| 列 | 说明 |
-|---|---|
-| `rpid` | 评论 id，**主键，用 TEXT 存**（B站 id 可能超过 JS 安全整数，存成字符串避免精度丢失） |
-| `bvid` / `oid` | 所属视频 / 评论区归属 id |
-| `parent` / `root` | 父评论 id / 根评论 id（一级评论都是 `'0'`） |
-| `is_root` | `1` = 一级评论，`0` = 楼中楼 |
-| `uname` | 评论者昵称（**只存公开昵称，不存 uid**，降低合规风险） |
-| `content` | 评论正文 —— **后续价格抽取的输入** |
-| `like_count` / `ctime` / `location` | 点赞数 / 评论时间 / IP 归属地 |
-| `sub_count` | 该评论下有多少条回复 |
-| `sub_fetched_count` | 已抓到的楼中楼数量；`NULL` 表示未展开或历史数据未知 |
-| `sub_context_complete` | `1` 已抓完、`0` 达到上限而截断、`NULL` 未核实 |
-| `raw` | B站原始 JSON，保留下来以后可重新解析，不必重新抓 |
-| `crawled_at` | 抓取时间 |
-
-索引：`bvid`、`ctime`、`root`。
-
-### `crawl_logs` —— 抓取流水
-
-每次抓取写一行：`bvid`、`started_at`、`finished_at`、`pages`、`saved`、`status`（running/success/failed）、`error`。
-
-### 用任意 SQL 工具查看（例如 DB Browser for SQLite 或命令行）
-
-```sql
--- 看看库里有哪些视频、各抓了多少条评论
-SELECT v.bvid, v.title, COUNT(c.rpid) AS cnt
-  FROM videos v LEFT JOIN comments c ON c.bvid = v.bvid
- GROUP BY v.bvid;
-
--- 找含有「元/块/券/会员」的评论（价格抽取的雏形）
-SELECT uname, like_count, content
-  FROM comments
- WHERE content LIKE '%券%' OR content LIKE '%会员%' OR content LIKE '%元%'
- ORDER BY like_count DESC LIMIT 20;
-```
-
----
-
-## 七、命令行参数速查
-
-### `crawl.ts`
-
-| 参数 | 默认 | 说明 |
-|---|---|---|
-| `--video` | 必填 | BV 号 / 视频链接 / b23.tv 短链 |
-| `--hot-limit` | 50 | 按点赞数选择多少条热门一级评论 |
-| `--recent-limit` | 30 | 按发布时间选择多少条最新一级评论 |
-| `--with-replies` | 关闭 | 是否展开楼中楼 |
-| `--sub-limit` | 20 | 每条一级评论下只保留前多少条楼中楼；超过后标记为截断 |
-| `--db` | `data/bilibili.db` | 数据库文件路径 |
-
-### `query.ts`
-
-| 子命令 | 说明 |
-|---|---|
-| `videos` | 列出库中视频及已入库评论数 |
-| `comments --video X [--limit N] [--order like\|time] [--root-only]` | 列出评论 |
-| `conversations --video X [--limit N] [--out path.jsonl]` | 组装带稳定编号、时间、回复关系和完整性状态的对话 |
-| `search --video X --regex P [--limit N]` | 正则搜索（价格抽取第一步） |
-| `export --video X [--out path.jsonl]` | 导出 JSONL，便于其他语言消费 |
-| `logs [--limit N]` | 查看抓取流水 |
-
----
-
-## 八、反爬与稳定性设计说明
-
-| 机制 | 位置 | 说明 |
-|---|---|---|
-| **WBI 签名** | `src/bilibili/wbi.ts` | 参数排序 → 过滤 `!'()*` → URL 编码 → `md5(query + mixin_key)`。B站改算法时只需改这一个文件 |
-| **设备指纹** | `client.ts` → `ensureBuvid()` | 自动调 `finger/spi` 申领 `buvid3`/`buvid4`，避免 `-352` |
-| **密钥缓存** | `client.ts` → `ensureMixinKey()` | `nav` 接口拿 `wbi_img`，缓存 10 分钟；遇到 `-403` 自动清缓存重试 |
-| **限速 + 抖动** | `client.ts` → `throttle()` | 相邻请求间隔 ≥ `BILI_REQUEST_INTERVAL_MS`，再叠加 0~40% 随机抖动，避免固定节奏 |
-| **重试与退避** | `client.ts` → `request()` | `-412/-509/-352` 退避重试（2s/4s/6s）；网络错误 1s/2s/3s；`-403` 换密钥重试；`-404` 直接失败不重试 |
-| **大整数保护** | `client.ts` → `parseJsonPreservingBigInt()` | 16 位以上数字先加引号再 parse，防止评论 id 精度丢失 |
-| **幂等写入** | `db.ts` | 全部用 `INSERT ... ON CONFLICT DO UPDATE`，任务可以随便重跑，不会产生重复数据 |
-| **事务批写** | `db.ts` → `insertComments()` | 一页评论一个事务，比逐条提交快几十倍，失败整体回滚 |
-| **WAL 模式** | `db.ts` → `openDb()` | 边抓边查不会互相阻塞 |
-
----
-
-## 九、常见错误码排查
-
-| 错误码 | 含义 | 处理 |
-|---|---|---|
-| `-403` | 签名错误 / 权限不足 | 程序会自动换密钥重试；若持续出现说明 B站改了签名算法，改 `wbi.ts` |
-| `-412` | 触发风控被拦截 | 调大 `BILI_REQUEST_INTERVAL_MS`、配置 `SESSDATA`、隔一段时间再跑 |
-| `-509` | 请求过于频繁 | 同上 |
-| `-352` | 风控校验失败（缺 buvid3） | 程序会自动申领；若仍失败可手动在 `.env` 填 `BILI_BUVID3` |
-| `-404` | 视频不存在 | 检查 BV 号；视频可能已删除或设为私密 |
-| `-400` | 请求参数错误 | 检查 BV 号是否正确；若它发生在**翻第 2 页**时，是翻页参数用错——本接口翻页只能用 `next`，传 `pagination_str` 必定 -400（本项目已修复，详见 `api.ts` 注释） |
-| 只抓到 3 条 | 未登录限制 | 见第五节：先跑 `npm run check:auth` 判断是「没配 SESSDATA」还是「配了但已失效（含被粘贴两遍）」，再对症处理 |
-
----
-
-## 十、合规提醒
-
-- 本项目**只抓取公开的评论内容**，不做批量爬站、不绕过登录限制、不采集用户身份信息（`comments` 表只存公开昵称，不存 uid）。
-- 请遵守 B站用户协议与 `robots.txt`，把请求频率控制在合理范围（默认 1.2 秒/次已经很保守）。
-- 抓下来的数据请仅用于个人比价参考，不要二次分发原始评论全文；对外展示时应给出原视频链接。
-
----
-
-## 十一、价格抽取契约与安全边界
-
-第二阶段基础代码位于 `src/extractor/`：
-
-| 文件 | 职责 |
-|---|---|
-| `types.ts` | 定义商品、页面价、报告成交价、额外费用、购买条件、证据和核验状态 |
-| `prompt.ts` | 把一个可审计对话组装为供应商无关的 LLM system/user Prompt |
-| `validator.ts` | 不信任模型输出，验证 JSON 结构、证据原文、金额计算和核验状态 |
-| `evals/price-cases.jsonl` | 人工评测种子：历史价、玩笑、型号混淆、会员成本、运费和上下文缺失 |
-
-核心规则：
-
-1. 缺失信息只能写 `null` 或 `[]`，不能用常识补全。
-2. `pagePrice`（页面价）、`reportedPaidPrice`（评论报告成交价）和 `totalCost`（含必需额外费用）必须分开。
-3. 证据编号必须存在，引用内容必须逐字出现在对应评论中。
-4. `totalCost = reportedPaidPrice + extraCostTotal`，额外费用合计还要与费用明细一致。
-5. 存在金额未知的必需会员费/运费时，不能编造 `extraCostTotal` 或 `totalCost`。
-6. 评论成交价默认只能标成 `historical_report` 或 `unverified`；**仅凭评论永远不能标成 `currently_verified`**。
-7. 楼中楼默认只保留前 20 条；超过时对话为 `truncated`，历史报告需要人工复核。
+仅凭评论不能核实真实订单、当前库存或当前可购买价格；外部展示应注明原视频及评论来源。
