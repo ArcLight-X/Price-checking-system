@@ -19,6 +19,9 @@ import {
   selectResearchConversations,
 } from './research-selection.ts';
 import type { PriceClaim } from './extractor/types.ts';
+import { forEachConcurrent } from './concurrency.ts';
+import { summaryToCsv, toSummaryRow } from './research-output.ts';
+import { loadResearchCache, promptFingerprint, saveResearchCache } from './research-cache.ts';
 
 const HELP_TEXT = `
 输入商品名称，自动搜索 B站视频、抓取评论并使用豆包 Seed 分析价格
@@ -31,10 +34,13 @@ const HELP_TEXT = `
   --product             必填，例如 "RTX 5070 Ti"
   --video-limit         搜索并处理多少个视频（默认 3）
   --conversation-limit  每个视频最多分析多少个价格候选对话（默认 10）
+  --llm-concurrency     同时调用模型的请求数（默认 3，设为 1 可恢复串行）
+  --no-cache            不复用此前相同输入的成功模型分析（仍会保存新结果）
   --hot-limit           每个视频抓多少条热门一级评论（默认 20）
   --recent-limit        每个视频抓多少条最新一级评论（默认 10）
   --sub-limit           每条一级评论最多抓多少条楼中楼（默认 10）
   --out                 输出 JSONL 路径
+  --csv                 摘要 CSV 路径（默认与 JSONL 同名，仅扩展名为 .csv）
   --db                  SQLite 数据库路径（默认 data/bilibili.db）
   -h, --help            显示帮助
 
@@ -154,37 +160,19 @@ function createVideoTitleConversation(title: string): CommentConversation {
   };
 }
 
-function displayAmount(claim: PriceClaim): string {
-  const amount = claim.amounts.totalCost
-    ?? claim.amounts.reportedPaidPrice
-    ?? claim.amounts.pagePrice;
-  if (amount === null) return '金额未知';
-  const symbols: Record<NonNullable<PriceClaim['amounts']['currency']>, string> = {
-    CNY: '¥', USD: '$', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', TWD: 'NT$',
-  };
-  const currency = claim.amounts.currency;
-  return currency ? `${symbols[currency]}${amount}` : `${amount}（币种未明）`;
-}
-
-function displayPlan(claim: PriceClaim): string {
-  const parts = [
-    claim.channel,
-    ...claim.conditions.map((condition) => condition.description),
-    ...claim.extraFees.map((fee) => fee.description),
-  ].filter((value): value is string => Boolean(value?.trim()));
-  return parts.length > 0 ? parts.join('；') : '未提及具体方案';
-}
-
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       product: { type: 'string' },
       'video-limit': { type: 'string' },
       'conversation-limit': { type: 'string' },
+      'llm-concurrency': { type: 'string' },
+      'no-cache': { type: 'boolean', default: false },
       'hot-limit': { type: 'string' },
       'recent-limit': { type: 'string' },
       'sub-limit': { type: 'string' },
       out: { type: 'string' },
+      csv: { type: 'string' },
       db: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -204,6 +192,9 @@ async function main(): Promise<void> {
 
   const videoLimit = toPositiveInt(values['video-limit'], 3);
   const conversationLimit = toPositiveInt(values['conversation-limit'], 10);
+  const llmConcurrency = toPositiveInt(values['llm-concurrency'], 3);
+  const cacheDir = path.resolve(PROJECT_ROOT, 'data', 'research-cache');
+  const runStartedAt = Date.now();
   const hotLimit = toPositiveInt(values['hot-limit'], 20);
   const recentLimit = toPositiveInt(values['recent-limit'], 10);
   const subLimit = toPositiveInt(values['sub-limit'], 10);
@@ -211,6 +202,10 @@ async function main(): Promise<void> {
   const outPath = values.out
     ? path.resolve(PROJECT_ROOT, values.out)
     : path.resolve(PROJECT_ROOT, 'data', `${safeFileName(product)}-research.jsonl`);
+  const csvPath = values.csv
+    ? path.resolve(PROJECT_ROOT, values.csv)
+    : path.join(path.dirname(outPath), `${path.parse(outPath).name}.csv`);
+  if (csvPath.toLowerCase() === outPath.toLowerCase()) throw new Error('CSV 路径不能与 JSONL 路径相同');
 
   const biliClient = createBiliClient({
     sessdata: config.sessdata,
@@ -229,10 +224,13 @@ async function main(): Promise<void> {
   const summaryRows: Record<string, unknown>[] = [];
   let failedCount = 0;
   let analyzedCount = 0;
+  let cacheHits = 0;
 
   try {
+    const searchStartedAt = Date.now();
     console.log(`搜索商品相关视频：${product}（价格 / 好价 / 入手价，播放量 >= ${MIN_RESEARCH_VIDEO_PLAY}）`);
     const videos = await searchResearchVideos(biliClient, db, product, videoLimit);
+    console.log(`搜索耗时：${((Date.now() - searchStartedAt) / 1000).toFixed(1)} 秒；模型并发：${llmConcurrency}`);
     if (videos.length === 0) throw new Error(`没有找到播放量达到 ${MIN_RESEARCH_VIDEO_PLAY} 的“${product}”相关视频`);
 
     console.table(videos.map((video, index) => ({
@@ -247,6 +245,7 @@ async function main(): Promise<void> {
     for (const [videoIndex, searchVideo] of videos.entries()) {
       console.log(`\n[视频 ${videoIndex + 1}/${videos.length}] ${searchVideo.bvid} ${searchVideo.title}`);
       try {
+        const crawlStartedAt = Date.now();
         const crawled = await crawlVideoComments(biliClient, searchVideo.bvid, {
           hotLimit,
           recentLimit,
@@ -256,6 +255,7 @@ async function main(): Promise<void> {
         });
         upsertVideo(db, crawled.video);
         insertComments(db, crawled.rows);
+        console.log(`  抓取耗时：${((Date.now() - crawlStartedAt) / 1000).toFixed(1)} 秒`);
 
         // 使用数据库中该视频的全部历史抓取结果，避免接口临时只返回少量评论时丢掉已有楼中楼。
         const storedRows = loadStoredConversationRows(db, searchVideo.bvid);
@@ -284,44 +284,54 @@ async function main(): Promise<void> {
           continue;
         }
 
-        for (const [candidateIndex, conversation] of candidates.entries()) {
+        const analysisStartedAt = Date.now();
+        await forEachConcurrent(candidates, llmConcurrency, async (conversation, candidateIndex) => {
           console.log(`  [分析 ${candidateIndex + 1}/${candidates.length}] ${conversation.conversationLabel}`);
           const startedAt = Date.now();
           try {
-            const response = await ark.extractJson(buildPriceExtractionPrompt(conversation, {
+            const prompt = buildPriceExtractionPrompt(conversation, {
               targetProduct: product,
               videoTitle: crawled.video.title,
-            }));
-            const validation = validatePriceExtraction(parseModelJson(response.content), conversation, {
-              targetProduct: product,
             });
-            analyzedCount += 1;
-            outputLines.push(JSON.stringify({
-              product,
-              bvid: searchVideo.bvid,
-              videoTitle: crawled.video.title,
-              rootRpid: conversation.rootRpid,
-              conversationLabel: conversation.conversationLabel,
-              model: response.model,
-              requestId: response.requestId,
-              durationMs: Date.now() - startedAt,
-              usage: response.usage,
-              ok: validation.ok,
-              extraction: validation.value,
-              issues: validation.issues,
-              rawModelOutput: validation.ok ? undefined : response.content,
-            }));
-            for (const claim of validation.value?.claims ?? []) {
-              summaryRows.push({
-                商品: [claim.product.brand, claim.product.name, claim.product.model, claim.product.variant]
-                  .filter(Boolean).join(' ') || product,
-                价格: displayAmount(claim),
-                渠道与方案: displayPlan(claim),
-                时间: claim.purchaseTime ?? '未提及',
-                状态: claim.verification.status,
-                证据: claim.evidence.map((evidence) => evidence.quote).join('｜'),
-                视频: searchVideo.bvid,
+            const promptHash = promptFingerprint(config.arkModel, prompt, searchVideo.bvid);
+            const cached = values['no-cache'] ? null : loadResearchCache(path.join(cacheDir, `${promptHash}.json`), promptHash);
+            let record: Record<string, unknown>;
+            if (cached) {
+              cacheHits += 1;
+              record = {
+                ...cached, product, bvid: searchVideo.bvid, videoTitle: crawled.video.title,
+                rootRpid: conversation.rootRpid, conversationLabel: conversation.conversationLabel,
+                cached: true, durationMs: 0,
+              };
+            } else {
+              const response = await ark.extractJson(prompt);
+              const validation = validatePriceExtraction(parseModelJson(response.content), conversation, {
+                targetProduct: product,
               });
+              analyzedCount += 1;
+              record = {
+                product, bvid: searchVideo.bvid, videoTitle: crawled.video.title,
+                rootRpid: conversation.rootRpid, conversationLabel: conversation.conversationLabel,
+                promptHash, model: response.model, requestId: response.requestId,
+                durationMs: Date.now() - startedAt, usage: response.usage,
+                ok: validation.ok, extraction: validation.value, issues: validation.issues,
+                rawModelOutput: validation.ok ? undefined : response.content,
+              };
+              if (validation.ok && validation.value) {
+                try {
+                  saveResearchCache(path.join(cacheDir, `${promptHash}.json`), {
+                    ...record, promptHash, ok: true, extraction: validation.value, issues: validation.issues,
+                  });
+                } catch (cacheError) {
+                  console.warn(`  缓存写入失败（仍保留本次分析结果）：${cacheError instanceof Error ? cacheError.message : String(cacheError)}`);
+                }
+              }
+            }
+            outputLines.push(JSON.stringify(record));
+            const extraction = record['extraction'] as { claims?: PriceClaim[] } | null;
+            for (const claim of extraction?.claims ?? []) {
+              const row = toSummaryRow(claim, product, searchVideo.bvid);
+              if (row) summaryRows.push(row);
             }
           } catch (error) {
             if (isFatalArkApiError(error)) throw error;
@@ -337,7 +347,8 @@ async function main(): Promise<void> {
               error: error instanceof Error ? error.message : String(error),
             }));
           }
-        }
+        });
+        console.log(`  分析耗时：${((Date.now() - analysisStartedAt) / 1000).toFixed(1)} 秒`);
       } catch (error) {
         if (isFatalArkApiError(error)) throw error;
         const message = error instanceof Error ? error.message : String(error);
@@ -352,19 +363,30 @@ async function main(): Promise<void> {
       }
     }
 
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, `${outputLines.join('\n')}\n`, 'utf8');
     console.log('\n价格与购买方案摘要：');
     if (summaryRows.length > 0) {
       console.table(summaryRows);
       console.log('注意：以上来自评论历史报告或未核验线索，不代表当前仍可购买。');
     } else {
-      console.log(`没有提取到明确价格。已分析 ${analyzedCount} 个候选，对话失败 ${failedCount} 个。`);
+      console.log(`没有同时提取到明确金额和具体方案。新分析 ${analyzedCount} 个候选，缓存命中 ${cacheHits} 个，对话失败 ${failedCount} 个。`);
       console.log('可以提高 --video-limit、--hot-limit、--recent-limit 或 --conversation-limit 后重试。');
     }
     console.log(`完整结果：${outPath}`);
+    console.log(`筛选摘要 CSV：${csvPath}`);
+    console.log(`新分析 ${analyzedCount} 个，复用缓存 ${cacheHits} 个，失败 ${failedCount} 个。`);
+    console.log(`总耗时：${((Date.now() - runStartedAt) / 1000).toFixed(1)} 秒`);
   } finally {
-    db.close();
+    try {
+      // 包括致命 API 错误：已完成的模型结果仍应保留，避免下次重做已付费请求。
+      if (outputLines.length > 0) {
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, `${outputLines.join('\n')}\n`, 'utf8');
+        fs.mkdirSync(path.dirname(csvPath), { recursive: true });
+        fs.writeFileSync(csvPath, summaryToCsv(summaryRows), 'utf8');
+      }
+    } finally {
+      db.close();
+    }
   }
 }
 
