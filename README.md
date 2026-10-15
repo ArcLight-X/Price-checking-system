@@ -2,7 +2,7 @@
 
 > 简历 / 项目介绍见 [docs/项目介绍.md](docs/项目介绍.md)。
 
-> **当前阶段：已完成双流评论采集、可审计对话组装，以及价格抽取的 LLM 契约与程序验证器。**
+> **当前阶段：已完成双流评论采集、可审计对话组装、豆包 Seed 价格抽取与程序校验，并支持候选预筛、3 路模型并发、成功结果缓存及 JSONL/CSV 输出。**
 >
 > 安全边界：评论中的价格只能作为历史报告或未核验线索；未经外部核验，不能标为“当前可实现低价”。
 
@@ -44,7 +44,7 @@ comment-price-checker/
 ├─ .vscode/settings.json 编辑器统一按 UTF-8 打开本项目文件
 ├─ README.md             本文件
 ├─ evals/                价格抽取人工评测种子（JSONL）
-├─ data/                 运行时生成：bilibili.db + 导出的 jsonl（已 git 忽略）
+├─ data/                 运行时生成：bilibili.db、JSONL、CSV 和分析缓存（已 git 忽略）
 ├─ scripts/
 │  └─ inspect-db.mjs     只读脚本：查看 .db 文件里到底存了什么（npx 或 node 直接跑）
 └─ src/
@@ -55,6 +55,7 @@ comment-price-checker/
    ├─ conversation.ts    组装稳定编号、回复关系和上下文完整性
    ├─ crawl.ts           【入口 1】抓取：视频信息 + 评论区 → 数据库
    ├─ query.ts           【入口 2】读取：查视频 / 查评论 / 正则搜索 / 导出
+   ├─ research.ts        【入口 3】按商品名称查询价格线索 → JSONL + CSV
    ├─ extractor/         LLM Prompt、输出类型及证据/金额验证器
    └─ bilibili/
       ├─ wbi.ts          WBI 签名算法（B站反爬核心，单独隔离便于日后维护）
@@ -96,34 +97,53 @@ node src/query.ts export   --video BV1GJ411x7h7 --out data/out.jsonl
 node src/query.ts logs                                        # 抓取流水日志
 ```
 
-### 3）使用豆包 Seed 分析评论
+### 3）按商品名称查询价格线索（推荐）
 
-先在本地 `.env` 中填写：
+在项目根目录把 `.env.example` 复制为 `.env`，填写火山方舟 API 密钥；建议同时填写 `BILI_SESSDATA`，否则可能只能获取少量评论：
 
 ```text
 ARK_API_KEY=你的火山方舟API密钥
 ARK_MODEL=doubao-seed-2-0-lite-260428
+BILI_SESSDATA=你的B站登录态Cookie值
 ```
 
-然后执行：
+在项目根目录执行（PowerShell 中可直接运行 `node`，不依赖 `npm run research` 的 Windows `chcp` 脚本）：
 
 ```powershell
-npm run analyze -- --video BV1GJ411x7h7 --limit 10
+node src/research.ts --product "RTX 5070 Ti"
+# 或使用 npm 脚本：npm run research -- --product "RTX 5070 Ti"
 ```
 
-结果默认写入 `data/<BV号>-price-analysis.jsonl`。每行对应一个一级评论对话，包含模型、Token 用量、结构化价格和基础校验结果。
+**结果保存位置（相对于项目根目录）：**
 
-如果只知道商品名称，可以一条命令自动搜索相关视频、抓取评论并分析：
+| 内容 | 默认文件 | 说明 |
+|---|---|---|
+| 筛选后的查价摘要 | `data/RTX-5070-Ti-research.csv` | 带 BOM 的 UTF-8 CSV，可用 Excel 打开；仅包含同时有明确金额和具体购买方案的记录；无符合记录时仍有表头 |
+| 完整分析记录 | `data/RTX-5070-Ti-research.jsonl` | 保存所有候选对话的结构化结果和校验信息，包含未进入 CSV 的记录 |
+| 评论数据库 | `data/bilibili.db` | 保存视频、评论和回复 |
+| 成功分析缓存 | `data/research-cache/` | 相同模型与输入下复用已通过校验的结果；`--no-cache` 可禁用读取缓存 |
+
+例如，当前项目目录位于 `D:\Programme Projects\GO Project\ex_mall` 时，以上 CSV 的**实际路径**为 `D:\Programme Projects\GO Project\ex_mall\data\RTX-5070-Ti-research.csv`，不是 C 盘下载目录。命令结束也会在终端打印实际输出路径。
+
+自定义 CSV 保存位置，或自定义完整 JSONL 的位置（省略 `--csv` 时 CSV 与 JSONL 同目录、同文件名，仅扩展名变为 `.csv`）：
 
 ```powershell
-npm run research -- --product "RTX 5070 Ti"
+node src/research.ts --product "RTX 5070 Ti" --csv "C:\Users\你的用户名\Downloads\查价摘要.csv"
+node src/research.ts --product "RTX 5070 Ti" --out data/结果.jsonl  # 同时生成 data/结果.csv
 ```
 
-只会选择播放量不少于 5000 且商品与输入一致的视频。例如搜索 `MacBook Neo` 时排除 `MacBook Neo 2`；搜索 `iPhone 17` 时排除充电器、手机壳以及 `Pro / Pro Max / Plus` 等其他版本。默认处理 3 个视频，每个视频最多分析 10 个包含价格信号的评论对话，结果写入 `data/RTX-5070-Ti-research.jsonl`。
-命令结束时会直接在终端打印价格、渠道、优惠条件和证据摘要；JSONL 保留完整结构化结果。
-终端摘要及同时生成的 `data/RTX-5070-Ti-research.csv` 只显示同时有明确金额和具体购买方案的记录；不符合条件的抽取仍保存在 JSONL 中以供核查。CSV 为带 BOM 的 UTF-8，支持用 Excel 打开；没有符合条件的记录时仍有表头。使用 `--csv data/自定义摘要.csv` 可指定路径，使用 `--out data/结果.jsonl` 时默认生成 `data/结果.csv`。默认复用相同模型和完整输入下已通过校验的结果（缓存位于 `data/research-cache/`），重复运行无需再次支付相同候选的模型调用；新抓取到的不同对话仍需调用模型。可使用 `--no-cache` 强制重新分析。首次查询若要缩短等待，可用 `--conversation-limit 6 --llm-concurrency 3`，代价是每视频最多仅分析 6 个候选；提高并发也可能触发模型侧限流。B站抓取继续保持限速。
+只会选择播放量不少于 5000 且商品与输入一致的视频。例如搜索 `MacBook Neo` 时排除 `MacBook Neo 2`；搜索 `iPhone 17` 时排除充电器、手机壳及 `Pro / Pro Max / Plus` 等版本。默认处理 3 个视频，每视频最多分析 10 个价格候选对话，模型并发默认为 3 路；可用 `--llm-concurrency 1` 改为串行，或用 `--conversation-limit 6` 减少每视频的候选数（可能遗漏线索）。B 站采集仍保持限速。**评论中的价格是历史报告或未核验线索，不代表当前可购买价格。**
 
-### 4）用 npm 脚本跑（等价写法）
+### 4）按已知 BV 号分析或查询已入库评论
+
+```powershell
+node src/analyze.ts --video BV1GJ411x7h7 --limit 10
+node src/query.ts comments --video BV1GJ411x7h7 --limit 20
+```
+
+单视频分析默认输出 `data/<BV号>-price-analysis.jsonl`，**不生成上述商品查询摘要 CSV**；`query.ts` 读取已入库评论，也不会生成查价 CSV。
+
+### 5）用 npm 脚本跑（等价写法）
 
 ```powershell
 npm run crawl -- --video BV1GJ411x7h7 --with-replies
